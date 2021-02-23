@@ -62,7 +62,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
     assert(modulus_bits >= 2048 and modulus_bits <= 4096);
 
     return struct {
-        const modulus_bytes = modulus_bits / 8;
+        const modulus_bytes = (modulus_bits + 7) / 8;
 
         // A secret blinding factor
         pub const Secret = [modulus_bytes]u8;
