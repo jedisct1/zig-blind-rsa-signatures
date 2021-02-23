@@ -166,7 +166,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 var m: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&padded, padded.len, m));
 
-                // Compute a blind factor and its inverse
+                // Compute a blinding factor and its inverse
                 var secret_inv: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 var secret: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 while (true) {
@@ -292,13 +292,13 @@ test "RSA blind signatures" {
     // Blind a message with the server public key,
     // return the blinding factor and the blind message
     const msg = "msg";
-    var blinding_result = try pk.blind(msg);
+    const blinding_result = try pk.blind(msg);
 
     // Compute a blind signature
-    var blind_sig = try sk.blind_sign(blinding_result.blind_message);
+    const blind_sig = try sk.blind_sign(blinding_result.blind_message);
 
     // Compute the signature for the original message
-    var sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
+    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
 
     // Verify the non-blind signature
     try pk.verify(sig, msg);
