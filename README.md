@@ -4,7 +4,7 @@ Author-blinded RSASSA-PSS RSAE signatures.
 
 This is an implementation of the [RSA Blind Signatures](https://chris-wood.github.io/draft-wood-cfrg-blind-signatures/draft-wood-cfrg-rsa-blind-signatures.html) proposal.
 
-## Use case
+## Protocol overview
 
 A client asks a server to sign a message. The server receives the message, and returns the signature.
 
