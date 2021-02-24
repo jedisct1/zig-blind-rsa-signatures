@@ -3,7 +3,7 @@ const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
     const mode = b.standardReleaseOptions();
-    const lib = b.addStaticLibrary("zig-rsa-blind-signatures", "src/main.zig");
+    const lib = b.addStaticLibrary("rsa-blind-signatures", "src/main.zig");
     lib.setBuildMode(mode);
     lib.install();
 
