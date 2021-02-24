@@ -13,6 +13,7 @@ const ssl = @cImport({
 });
 
 const BN_CTX = ssl.BN_CTX;
+const BN_MONT_CTX = ssl.BN_MONT_CTX;
 const EVP_MD = ssl.EVP_MD;
 const RSA = ssl.RSA;
 const BIGNUM = ssl.BIGNUM;
@@ -82,9 +83,11 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
         // An RSA public key
         pub const PublicKey = struct {
             rsa: *RSA,
+            mont_ctx: *BN_MONT_CTX,
 
             pub fn deinit(pk: PublicKey) void {
                 ssl.RSA_free(pk.rsa);
+                ssl.BN_MONT_CTX_free(pk.mont_ctx);
             }
 
             // Import a serialized RSA public key
@@ -93,8 +96,9 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 var der_ptr: [*c]const u8 = der.ptr;
                 try sslNTry(EVP_PKEY, ssl.d2i_PrivateKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
                 defer ssl.EVP_PKEY_free(evp_pkey);
-                var pk = try sslAlloc(RSA, ssl.EVP_PKEY_get1_RSA(evp_pkey));
-                return PublicKey{ .rsa = pk };
+                const pk = try sslAlloc(RSA, ssl.EVP_PKEY_get1_RSA(evp_pkey));
+                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk));
+                return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
             }
 
             // Serialize an RSA public key
@@ -120,7 +124,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
 
                 // PSS-MGF1 padding
                 var padded: [modulus_bytes]u8 = undefined;
-                var evp_md: *const EVP_MD = try sslConstPtr(EVP_MD, Hash.evp());
+                const evp_md: *const EVP_MD = try sslConstPtr(EVP_MD, Hash.evp());
                 try sslTry(ssl.RSA_padding_add_PKCS1_PSS_mgf1(pk.rsa, &padded, &msg_hash, evp_md, evp_md, -1));
                 ssl.OPENSSL_cleanse(&msg_hash, msg_hash.len);
 
@@ -179,7 +183,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 // Blind the message
                 var x: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 var blind_m: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
-                try sslTry(ssl.BN_mod_exp(x, secret_inv, ssl.RSA_get0_e(pk.rsa), ssl.RSA_get0_n(pk.rsa), bn_ctx));
+                try sslTry(ssl.BN_mod_exp_mont(x, secret_inv, ssl.RSA_get0_e(pk.rsa), ssl.RSA_get0_n(pk.rsa), bn_ctx, pk.mont_ctx));
                 ssl.BN_clear(secret_inv);
                 try sslTry(ssl.BN_mod_mul(blind_m, m, x, ssl.RSA_get0_n(pk.rsa), bn_ctx));
 
@@ -265,8 +269,9 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 defer ssl.BN_free(e);
                 try sslTry(ssl.BN_set_word(e, ssl.RSA_F4));
                 try sslTry(ssl.RSA_generate_key_ex(sk, modulus_bits, e, null));
-                var pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk));
-                return KeyPair{ .sk = SecretKey{ .rsa = sk }, .pk = PublicKey{ .rsa = pk } };
+                const pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk));
+                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
+                return KeyPair{ .sk = SecretKey{ .rsa = sk }, .pk = PublicKey{ .rsa = pk, .mont_ctx = mont_ctx } };
             }
         };
 
@@ -277,6 +282,18 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             try sslTry(Hash.update(&hash_ctx, msg.ptr, msg.len));
             try sslTry(Hash.final(&h, &hash_ctx));
             return h;
+        }
+
+        fn new_mont_domain(n: *const BIGNUM) !*BN_MONT_CTX {
+            var mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
+            var bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
+            ssl.BN_CTX_start(bn_ctx);
+            defer {
+                ssl.BN_CTX_end(bn_ctx);
+                ssl.BN_CTX_free(bn_ctx);
+            }
+            try sslTry(ssl.BN_MONT_CTX_set(mont_ctx, n, bn_ctx));
+            return mont_ctx;
         }
     };
 }
