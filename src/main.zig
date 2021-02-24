@@ -262,6 +262,13 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return serialized[0..@intCast(usize, len)];
             }
 
+            // Recover the public key
+            pub fn public_key(sk: SecretKey) !PublicKey {
+                const pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk.rsa));
+                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
+                return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
+            }
+
             // Compute a blind signature
             pub fn blind_sign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
                 var blind_sig: BlindSignature = undefined;
@@ -288,9 +295,8 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 defer ssl.BN_free(e);
                 try sslTry(ssl.BN_set_word(e, ssl.RSA_F4));
                 try sslTry(ssl.RSA_generate_key_ex(sk, modulus_bits, e, null));
-                const pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk));
-                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
-                return KeyPair{ .sk = SecretKey{ .rsa = sk }, .pk = PublicKey{ .rsa = pk, .mont_ctx = mont_ctx } };
+                const sk_ = SecretKey{ .rsa = sk };
+                return KeyPair{ .sk = sk_, .pk = try sk_.public_key() };
             }
         };
 
@@ -349,13 +355,17 @@ test "RSA export/import" {
 
     var buf: [1500]u8 = undefined;
 
+    const serialized_sk = try sk.serialize(&buf);
+    const recovered_sk = try BlindRsa(2048).SecretKey.import(serialized_sk);
+    const serialized_sk2 = try recovered_sk.serialize(&buf);
+    assert(mem.eql(u8, serialized_sk, serialized_sk2));
+
     const serialized_pk = try pk.serialize(&buf);
     const recovered_pk = try BlindRsa(2048).PublicKey.import(serialized_pk);
     const serialized_pk2 = try recovered_pk.serialize(&buf);
     assert(mem.eql(u8, serialized_pk, serialized_pk2));
 
-    const serialized_sk = try sk.serialize(&buf);
-    const recovered_sk = try BlindRsa(2048).SecretKey.import(serialized_sk);
-    const serialized_sk2 = try recovered_sk.serialize(&buf);
-    assert(mem.eql(u8, serialized_sk, serialized_sk2));
+    const recovered_pk2 = try sk.public_key();
+    const serialized_pk3 = try recovered_pk2.serialize(&buf);
+    assert(mem.eql(u8, serialized_pk, serialized_pk3));
 }
