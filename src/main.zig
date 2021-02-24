@@ -93,11 +93,26 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             // Import a serialized RSA public key
             pub fn import(der: []const u8) !PublicKey {
                 var evp_pkey: ?*EVP_PKEY = null;
-                const der_ptr: [*c]const u8 = der.ptr;
-                try sslNTry(EVP_PKEY, ssl.d2i_PrivateKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
+                var der_ptr: [*c]const u8 = der.ptr;
+                try sslNTry(EVP_PKEY, ssl.d2i_PublicKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
                 defer ssl.EVP_PKEY_free(evp_pkey);
                 const pk = try sslAlloc(RSA, ssl.EVP_PKEY_get1_RSA(evp_pkey));
-                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk));
+                errdefer ssl.RSA_free(pk);
+
+                if (ssl.RSA_bits(pk) != modulus_bits) {
+                    return error.UnexpectedModulus;
+                }
+                const e3: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(e3);
+                try sslTry(ssl.BN_set_word(e3, ssl.RSA_3));
+                const ef4: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(ef4);
+                try sslTry(ssl.BN_set_word(ef4, ssl.RSA_F4));
+                if (ssl.BN_cmp(e3, ssl.RSA_get0_e(pk)) != 0 and ssl.BN_cmp(ef4, ssl.RSA_get0_e(pk)) != 0) {
+                    return error.UnexpectedExponent;
+                }
+
+                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
                 return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
             }
 
@@ -107,7 +122,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 try sslTry(ssl.EVP_PKEY_set1_RSA(evp_pkey, pk.rsa));
                 defer ssl.EVP_PKEY_free(evp_pkey);
                 var serialized_ptr: [*c]u8 = null;
-                const len = ssl.i2d_PrivateKey(evp_pkey, &serialized_ptr);
+                const len = ssl.i2d_PublicKey(evp_pkey, &serialized_ptr);
                 try sslNTry(u8, serialized_ptr);
                 defer ssl.OPENSSL_free(serialized_ptr);
                 if (len < 0 or len > serialized.len) {
@@ -220,10 +235,14 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             // Import an RSA secret key
             pub fn import(der: []const u8) !SecretKey {
                 var evp_pkey: ?*EVP_PKEY = null;
-                const der_ptr: [*c]const u8 = der.ptr;
+                var der_ptr: [*c]const u8 = der.ptr;
                 try sslNTry(EVP_PKEY, ssl.d2i_PrivateKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
                 defer ssl.EVP_PKEY_free(evp_pkey);
                 const sk = try sslAlloc(RSA, ssl.EVP_PKEY_get1_RSA(evp_pkey));
+                errdefer ssl.RSA_free(sk);
+                if (ssl.RSA_bits(sk) != modulus_bits) {
+                    return error.UnexpectedModulus;
+                }
                 return SecretKey{ .rsa = sk };
             }
 
@@ -319,4 +338,24 @@ test "RSA blind signatures" {
 
     // Verify the non-blind signature
     try pk.verify(sig, msg);
+}
+
+test "RSA export/import" {
+    const kp = try BlindRsa(2048).KeyPair.generate();
+    defer kp.deinit();
+
+    const pk = kp.pk;
+    const sk = kp.sk;
+
+    var buf: [1500]u8 = undefined;
+
+    const serialized_pk = try pk.serialize(&buf);
+    const recovered_pk = try BlindRsa(2048).PublicKey.import(serialized_pk);
+    const serialized_pk2 = try recovered_pk.serialize(&buf);
+    assert(mem.eql(u8, serialized_pk, serialized_pk2));
+
+    const serialized_sk = try sk.serialize(&buf);
+    const recovered_sk = try BlindRsa(2048).SecretKey.import(serialized_sk);
+    const serialized_sk2 = try recovered_sk.serialize(&buf);
+    assert(mem.eql(u8, serialized_sk, serialized_sk2));
 }
