@@ -92,6 +92,9 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
 
             // Import a serialized RSA public key
             pub fn import(der: []const u8) !PublicKey {
+                if (der.len >= 1000) {
+                    return error.InputTooLarge;
+                }
                 var evp_pkey: ?*EVP_PKEY = null;
                 var der_ptr: [*c]const u8 = der.ptr;
                 try sslNTry(EVP_PKEY, ssl.d2i_PublicKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
@@ -347,21 +350,21 @@ test "RSA blind signatures" {
 }
 
 test "RSA export/import" {
-    const kp = try BlindRsa(2048).KeyPair.generate();
+    const kp = try BlindRsa(3072).KeyPair.generate();
     defer kp.deinit();
 
     const pk = kp.pk;
     const sk = kp.sk;
 
-    var buf: [1500]u8 = undefined;
+    var buf: [2000]u8 = undefined;
 
     const serialized_sk = try sk.serialize(&buf);
-    const recovered_sk = try BlindRsa(2048).SecretKey.import(serialized_sk);
+    const recovered_sk = try BlindRsa(3072).SecretKey.import(serialized_sk);
     const serialized_sk2 = try recovered_sk.serialize(&buf);
     assert(mem.eql(u8, serialized_sk, serialized_sk2));
 
     const serialized_pk = try pk.serialize(&buf);
-    const recovered_pk = try BlindRsa(2048).PublicKey.import(serialized_pk);
+    const recovered_pk = try BlindRsa(3072).PublicKey.import(serialized_pk);
     const serialized_pk2 = try recovered_pk.serialize(&buf);
     assert(mem.eql(u8, serialized_pk, serialized_pk2));
 
