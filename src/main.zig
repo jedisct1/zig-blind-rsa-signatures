@@ -252,8 +252,8 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             // Serialize an RSA secret key
             pub fn serialize(sk: SecretKey, serialized: []u8) ![]u8 {
                 const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
-                try sslTry(ssl.EVP_PKEY_set1_RSA(evp_pkey, sk.rsa));
                 defer ssl.EVP_PKEY_free(evp_pkey);
+                try sslTry(ssl.EVP_PKEY_set1_RSA(evp_pkey, sk.rsa));
                 var serialized_ptr: [*c]u8 = null;
                 const len = ssl.i2d_PrivateKey(evp_pkey, &serialized_ptr);
                 try sslNTry(u8, serialized_ptr);
@@ -268,6 +268,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             // Recover the public key
             pub fn public_key(sk: SecretKey) !PublicKey {
                 const pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk.rsa));
+                errdefer ssl.RSA_free(pk);
                 const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
                 return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
             }
@@ -314,6 +315,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
 
         fn new_mont_domain(n: *const BIGNUM) !*BN_MONT_CTX {
             const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
+            errdefer ssl.BN_MONT_CTX_free(mont_ctx);
             const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
             ssl.BN_CTX_start(bn_ctx);
             defer {
