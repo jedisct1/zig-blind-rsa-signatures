@@ -59,7 +59,7 @@ This implementation requires OpenSSL or BoringSSL.
 
 Some helper functions are also included for key serialization and deserialization.
 
-## Rewrites in other languages
+## For other languages
 
 * [Rust](https://github.com/jedisct1/rust-blind-rsa-signatures)
 * [C](https://github.com/jedisct1/blind-rsa-signatures)
