@@ -61,5 +61,5 @@ Some helper functions are also included for key serialization and deserializatio
 
 ## Rewrites in other languages
 
-* [Rust](https://github.com/jedisct1/zig-blind-rsa-signatures)
+* [Rust](https://github.com/jedisct1/rust-blind-rsa-signatures)
 * [C](https://github.com/jedisct1/blind-rsa-signatures)
