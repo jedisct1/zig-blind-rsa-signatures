@@ -58,29 +58,29 @@ const Hash = .{
     .final = ssl.SHA384_Final,
 };
 
-// Blind RSA signatures with a modulus_bits modulus size
+/// Blind RSA signatures with a modulus_bits modulus size
 pub fn BlindRsa(comptime modulus_bits: u16) type {
     assert(modulus_bits >= 2048 and modulus_bits <= 4096);
 
     return struct {
         const modulus_bytes = (modulus_bits + 7) / 8;
 
-        // A secret blinding factor
+        /// A secret blinding factor
         pub const Secret = [modulus_bytes]u8;
 
-        // A blind message
+        /// A blind message
         pub const BlindMessage = [modulus_bytes]u8;
 
-        // A blind signature
+        /// A blind signature
         pub const BlindSignature = [modulus_bytes]u8;
 
-        // A (non-blind) signature
+        /// A (non-blind) signature
         pub const Signature = [modulus_bytes]u8;
 
-        // The result of a blinding operation
+        /// The result of a blinding operation
         pub const BlindingResult = struct { blind_message: BlindMessage, secret: Secret };
 
-        // An RSA public key
+        /// An RSA public key
         pub const PublicKey = struct {
             rsa: *RSA,
             mont_ctx: *BN_MONT_CTX,
@@ -91,7 +91,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 ssl.BN_MONT_CTX_free(pk.mont_ctx);
             }
 
-            // Import a serialized RSA public key
+            /// Import a serialized RSA public key
             pub fn import(der: []const u8) !PublicKey {
                 if (der.len >= 1000) {
                     return error.InputTooLarge;
@@ -120,7 +120,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
             }
 
-            // Serialize an RSA public key
+            /// Serialize an RSA public key
             pub fn serialize(pk: PublicKey, serialized: []u8) ![]u8 {
                 const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
                 try sslTry(ssl.EVP_PKEY_set1_RSA(evp_pkey, pk.rsa));
@@ -136,7 +136,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return serialized[0..@intCast(usize, len)];
             }
 
-            // Blind a message and return the random blinding secret and the blind message
+            /// Blind a message and return the random blinding secret and the blind message
             pub fn blind(pk: PublicKey, msg: []const u8) !BlindingResult {
                 // Compute H(msg)
                 var msg_hash = try hash(msg);
@@ -164,7 +164,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return _blind(bn_ctx, padded, pk);
             }
 
-            // Compute a signature for the original message
+            /// Compute a signature for the original message
             pub fn finalize(pk: PublicKey, blind_sig: BlindSignature, secret_s: Secret, msg: []const u8) !Signature {
                 const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
                 ssl.BN_CTX_start(bn_ctx);
@@ -187,12 +187,12 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return sig;
             }
 
-            // Verify a (non-blind) signature
+            /// Verify a (non-blind) signature
             pub fn verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
                 return rsassa_pss_verify(pk, sig, msg);
             }
 
-            // Use deterministic padding (not recommended for most applications)
+            /// Use deterministic padding (not recommended for most applications)
             pub fn useDeterministicPadding(pk: *PublicKey, deterministic_padding: bool) void {
                 pk.deterministic_padding = deterministic_padding;
             }
@@ -248,6 +248,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             }
         };
 
+        /// An RSA secret key
         pub const SecretKey = struct {
             rsa: *RSA,
 
@@ -255,7 +256,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 ssl.RSA_free(sk.rsa);
             }
 
-            // Import an RSA secret key
+            /// Import an RSA secret key
             pub fn import(der: []const u8) !SecretKey {
                 var evp_pkey: ?*EVP_PKEY = null;
                 var der_ptr: [*c]const u8 = der.ptr;
@@ -269,7 +270,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return SecretKey{ .rsa = sk };
             }
 
-            // Serialize an RSA secret key
+            /// Serialize an RSA secret key
             pub fn serialize(sk: SecretKey, serialized: []u8) ![]u8 {
                 const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
                 defer ssl.EVP_PKEY_free(evp_pkey);
@@ -285,7 +286,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return serialized[0..@intCast(usize, len)];
             }
 
-            // Recover the public key
+            /// Recover the public key
             pub fn public_key(sk: SecretKey) !PublicKey {
                 const pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk.rsa));
                 errdefer ssl.RSA_free(pk);
@@ -293,7 +294,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
             }
 
-            // Compute a blind signature
+            /// Compute a blind signature
             pub fn blind_sign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
                 var blind_sig: BlindSignature = undefined;
                 try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, sk.rsa, ssl.RSA_NO_PADDING));
@@ -301,7 +302,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             }
         };
 
-        // An RSA key pair
+        /// An RSA key pair
         pub const KeyPair = struct {
             pk: PublicKey,
             sk: SecretKey,
@@ -311,7 +312,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 kp.sk.deinit();
             }
 
-            // Generate a new key pair
+            /// Generate a new key pair
             pub fn generate() !KeyPair {
                 const sk = try sslAlloc(RSA, ssl.RSA_new());
                 errdefer ssl.RSA_free(sk);
@@ -323,7 +324,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 return KeyPair{ .sk = sk_, .pk = try sk_.public_key() };
             }
 
-            // Use deterministic padding (not recommended for most applications)
+            /// Use deterministic padding (not recommended for most applications)
             pub fn useDeterministicPadding(kp: *KeyPair, deterministic_padding: bool) void {
                 kp.pk.useDeterministicPadding(deterministic_padding);
             }
