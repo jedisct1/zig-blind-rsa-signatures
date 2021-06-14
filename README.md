@@ -59,6 +59,9 @@ This implementation requires OpenSSL or BoringSSL.
 
 Some helper functions are also included for key serialization and deserialization.
 
+Deterministic signatures can be created and verified by calling `useDeterministicPadding(true)`
+on the public key. Most applications should *not* use deterministic signatures.
+
 ## For other languages
 
 * [Rust](https://github.com/jedisct1/rust-blind-rsa-signatures)
