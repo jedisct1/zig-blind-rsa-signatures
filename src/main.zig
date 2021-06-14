@@ -84,6 +84,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
         pub const PublicKey = struct {
             rsa: *RSA,
             mont_ctx: *BN_MONT_CTX,
+            deterministic_padding: bool = false,
 
             pub fn deinit(pk: PublicKey) void {
                 ssl.RSA_free(pk.rsa);
@@ -143,7 +144,14 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 // PSS-MGF1 padding
                 var padded: [modulus_bytes]u8 = undefined;
                 const evp_md: *const EVP_MD = try sslConstPtr(EVP_MD, Hash.evp());
-                try sslTry(ssl.RSA_padding_add_PKCS1_PSS_mgf1(pk.rsa, &padded, &msg_hash, evp_md, evp_md, -1));
+                try sslTry(ssl.RSA_padding_add_PKCS1_PSS_mgf1(
+                    pk.rsa,
+                    &padded,
+                    &msg_hash,
+                    evp_md,
+                    evp_md,
+                    if (pk.deterministic_padding) 0 else -1,
+                ));
                 ssl.OPENSSL_cleanse(&msg_hash, msg_hash.len);
 
                 // Blind the padded message
@@ -182,6 +190,11 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             // Verify a (non-blind) signature
             pub fn verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
                 return rsassa_pss_verify(pk, sig, msg);
+            }
+
+            // Use deterministic padding (not recommended for most applications)
+            pub fn useDeterministicPadding(pk: *PublicKey, deterministic_padding: bool) void {
+                pk.deterministic_padding = deterministic_padding;
             }
 
             fn _blind(bn_ctx: *BN_CTX, padded: [modulus_bytes]u8, pk: PublicKey) !BlindingResult {
@@ -224,7 +237,14 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 try sslNegTry(ssl.RSA_public_decrypt(sig.len, &sig, &em, pk.rsa, ssl.RSA_NO_PADDING));
 
                 const evp_md: *const EVP_MD = try sslConstPtr(EVP_MD, Hash.evp());
-                try sslTry(ssl.RSA_verify_PKCS1_PSS_mgf1(pk.rsa, &msg_hash, evp_md, evp_md, &em, -1));
+                try sslTry(ssl.RSA_verify_PKCS1_PSS_mgf1(
+                    pk.rsa,
+                    &msg_hash,
+                    evp_md,
+                    evp_md,
+                    &em,
+                    if (pk.deterministic_padding) 0 else -1,
+                ));
             }
         };
 
@@ -302,6 +322,11 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 const sk_ = SecretKey{ .rsa = sk };
                 return KeyPair{ .sk = sk_, .pk = try sk_.public_key() };
             }
+
+            // Use deterministic padding (not recommended for most applications)
+            pub fn useDeterministicPadding(kp: *KeyPair, deterministic_padding: bool) void {
+                kp.pk.useDeterministicPadding(deterministic_padding);
+            }
         };
 
         fn hash(msg: []const u8) ![Hash.digest_length]u8 {
@@ -349,6 +374,28 @@ test "RSA blind signatures" {
 
     // Verify the non-blind signature
     try pk.verify(sig, msg);
+}
+
+test "Deterministic RSA blind signatures" {
+    // Generate a new RSA-2048 key
+    var kp = try BlindRsa(2048).KeyPair.generate();
+    defer kp.deinit();
+    var pk = kp.pk;
+    const sk = kp.sk;
+
+    const msg = "msg";
+
+    // Use deterministic padding
+    pk.useDeterministicPadding(true);
+
+    const blinding_result = try pk.blind(msg);
+    const blind_sig = try sk.blind_sign(blinding_result.blind_message);
+    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
+    try pk.verify(sig, msg);
+
+    // Verificatin without deterministic padding should fail
+    pk.useDeterministicPadding(false);
+    try std.testing.expectError(error.InternalError, pk.verify(sig, msg));
 }
 
 test "RSA export/import" {
