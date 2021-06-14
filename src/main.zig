@@ -183,7 +183,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
 
                 var sig: Signature = undefined;
                 try sslTry(bn2binPadded(&sig, sig.len, z));
-                try rsassa_pss_verify(pk, sig, msg);
+                try verify(pk, sig, msg);
                 return sig;
             }
 
