@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const debug = std.debug;
 const fmt = std.fmt;
 const mem = std.mem;
 const ssl = @cImport({
@@ -471,4 +472,41 @@ test "Test vector" {
 
     const computed_blind_sig = try sk.blind_sign(blinded_message);
     try testing.expectEqualSlices(u8, computed_blind_sig[0..], blind_sig[0..]);
+}
+
+test "Test vector generation" {
+    const modulus_bits = 2048;
+    const kp = try BlindRsa(modulus_bits).KeyPair.generate();
+    defer kp.deinit();
+    const pk = kp.pk;
+    const sk = kp.sk;
+    const pk_ = pk.rsa;
+    const sk_ = sk.rsa;
+    var p: [modulus_bits / 8 / 2]u8 = undefined;
+    var q: [modulus_bits / 8 / 2]u8 = undefined;
+    var n: [modulus_bits / 8]u8 = undefined;
+    var d: [modulus_bits / 8]u8 = undefined;
+    var e: [3]u8 = undefined;
+    try sslTry(bn2binPadded(&p, p.len, ssl.RSA_get0_p(sk_).?));
+    try sslTry(bn2binPadded(&q, q.len, ssl.RSA_get0_q(sk_).?));
+    try sslTry(bn2binPadded(&n, n.len, ssl.RSA_get0_n(sk_).?));
+    try sslTry(bn2binPadded(&d, d.len, ssl.RSA_get0_d(sk_).?));
+    try sslTry(bn2binPadded(&e, e.len, ssl.RSA_get0_e(sk_).?));
+    debug.print("p: {s}\n", .{fmt.fmtSliceHexLower(&p)});
+    debug.print("q: {s}\n", .{fmt.fmtSliceHexLower(&q)});
+    debug.print("n: {s}\n", .{fmt.fmtSliceHexLower(&n)});
+    debug.print("d: {s}\n", .{fmt.fmtSliceHexLower(&d)});
+    debug.print("e: {s}\n", .{fmt.fmtSliceHexLower(&e)});
+
+    const msg = "This is just a test vector";
+    debug.print("msg: {s}\n", .{fmt.fmtSliceHexLower(msg)});
+    const blinded_msg = try pk.blind(msg);
+    debug.print("inv: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.secret)});
+    debug.print("blinded_message: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.blind_message)});
+
+    const blind_sig = try sk.blind_sign(blinded_msg.blind_message);
+    debug.print("blind_sig: {s}\n", .{fmt.fmtSliceHexLower(&blind_sig)});
+
+    const sig = try pk.finalize(blind_sig, blinded_msg.secret, msg);
+    debug.print("sig: {s}\n", .{fmt.fmtSliceHexLower(&sig)});
 }
