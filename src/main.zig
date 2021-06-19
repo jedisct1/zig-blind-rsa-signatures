@@ -19,6 +19,7 @@ const testing = std.testing;
 const BN_CTX = ssl.BN_CTX;
 const BN_MONT_CTX = ssl.BN_MONT_CTX;
 const EVP_MD = ssl.EVP_MD;
+const EVP_MD_CTX = ssl.EVP_MD_CTX;
 const RSA = ssl.RSA;
 const BIGNUM = ssl.BIGNUM;
 const EVP_PKEY = ssl.EVP_PKEY;
@@ -54,30 +55,9 @@ fn bn2binPadded(out: [*c]u8, out_len: usize, in: *const BIGNUM) c_int {
 }
 
 const HashParams = struct {
-    const sha256 = .{
-        .digest_length = ssl.SHA256_DIGEST_LENGTH,
-        .evp = ssl.EVP_sha256,
-        .ctx = ssl.SHA256_CTX,
-        .init = ssl.SHA256_Init,
-        .update = ssl.SHA256_Update,
-        .final = ssl.SHA256_Final,
-    };
-    const sha384 = .{
-        .digest_length = ssl.SHA384_DIGEST_LENGTH,
-        .evp = ssl.EVP_sha384,
-        .ctx = ssl.SHA512_CTX,
-        .init = ssl.SHA384_Init,
-        .update = ssl.SHA384_Update,
-        .final = ssl.SHA384_Final,
-    };
-    const sha512 = .{
-        .digest_length = ssl.SHA512_DIGEST_LENGTH,
-        .evp = ssl.EVP_sha512,
-        .ctx = ssl.SHA512_CTX,
-        .init = ssl.SHA512_Init,
-        .update = ssl.SHA512_Update,
-        .final = ssl.SHA512_Final,
-    };
+    const sha256 = .{ .evp_fn = ssl.EVP_sha256 };
+    const sha384 = .{ .evp_fn = ssl.EVP_sha384 };
+    const sha512 = .{ .evp_fn = ssl.EVP_sha512 };
 };
 
 /// Blind RSA signatures with a `modulus_bits` modulus size.
@@ -172,20 +152,21 @@ pub fn BlindRsa(
             /// Blind a message and return the random blinding secret and the blind message
             pub fn blind(pk: PublicKey, msg: []const u8) !BlindingResult {
                 // Compute H(msg)
-                var msg_hash = try hash(msg);
+                const evp_md = Hash.evp_fn().?;
+                var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
+                const msg_hash = try hash(evp_md, &msg_hash_buf, msg);
 
                 // PSS-MGF1 padding
                 var padded: [modulus_bytes]u8 = undefined;
-                const evp_md: *const EVP_MD = try sslConstPtr(EVP_MD, Hash.evp());
                 try sslTry(ssl.RSA_padding_add_PKCS1_PSS_mgf1(
                     pk.rsa,
                     &padded,
-                    &msg_hash,
+                    msg_hash.ptr,
                     evp_md,
                     evp_md,
                     salt_length,
                 ));
-                ssl.OPENSSL_cleanse(&msg_hash, msg_hash.len);
+                ssl.OPENSSL_cleanse(msg_hash.ptr, msg_hash.len);
 
                 // Blind the padded message
                 const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
@@ -260,14 +241,14 @@ pub fn BlindRsa(
             }
 
             fn rsassa_pss_verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
-                const msg_hash = try hash(msg);
+                const evp_md = Hash.evp_fn().?;
+                var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
+                const msg_hash = try hash(evp_md, &msg_hash_buf, msg);
                 var em: [modulus_bytes]u8 = undefined;
                 try sslNegTry(ssl.RSA_public_decrypt(sig.len, &sig, &em, pk.rsa, ssl.RSA_NO_PADDING));
-
-                const evp_md: *const EVP_MD = try sslConstPtr(EVP_MD, Hash.evp());
                 try sslTry(ssl.RSA_verify_PKCS1_PSS_mgf1(
                     pk.rsa,
-                    &msg_hash,
+                    msg_hash.ptr,
                     evp_md,
                     evp_md,
                     &em,
@@ -353,13 +334,14 @@ pub fn BlindRsa(
             }
         };
 
-        fn hash(msg: []const u8) ![Hash.digest_length]u8 {
-            var hash_ctx: Hash.ctx = undefined;
-            var h: [Hash.digest_length]u8 = undefined;
-            try sslTry(Hash.init(&hash_ctx));
-            try sslTry(Hash.update(&hash_ctx, msg.ptr, msg.len));
-            try sslTry(Hash.final(&h, &hash_ctx));
-            return h;
+        fn hash(evp: *const EVP_MD, h: *[ssl.EVP_MAX_MD_SIZE]u8, msg: []const u8) ![]u8 {
+            const len = @intCast(usize, ssl.EVP_MD_size(evp));
+            debug.assert(h.len >= len);
+            var hash_ctx = try sslAlloc(EVP_MD_CTX, ssl.EVP_MD_CTX_new());
+            try sslTry(ssl.EVP_DigestInit(hash_ctx, evp));
+            try sslTry(ssl.EVP_DigestUpdate(hash_ctx, msg.ptr, msg.len));
+            try sslTry(ssl.EVP_DigestFinal_ex(hash_ctx, h, null));
+            return h[0..len];
         }
 
         fn new_mont_domain(n: *const BIGNUM) !*BN_MONT_CTX {
