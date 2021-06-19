@@ -80,7 +80,9 @@ const HashParams = struct {
     };
 };
 
-/// Blind RSA signatures with a modulus_bits modulus size
+/// Blind RSA signatures with a `modulus_bits` modulus size.
+/// and the specified hash functions both for message hashing and padding.
+/// Non-deterministic padding is recommended for most applications.
 pub fn BlindRsa(
     comptime modulus_bits: u16,
     comptime hash_function: enum { sha256, sha384, sha512 },
