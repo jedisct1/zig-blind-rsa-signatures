@@ -6,6 +6,7 @@ const mem = std.mem;
 const ssl = @cImport({
     @cDefine("__FILE__", "\"blindrsa.zig\"");
     @cDefine("__LINE__", "0");
+    @cDefine("OPENSSL_API_COMPAT", "10100");
 
     @cInclude("openssl/bn.h");
     @cInclude("openssl/evp.h");
@@ -52,18 +53,45 @@ fn bn2binPadded(out: [*c]u8, out_len: usize, in: *const BIGNUM) c_int {
     return 0;
 }
 
-const Hash = .{
-    .digest_length = ssl.SHA384_DIGEST_LENGTH,
-    .evp = ssl.EVP_sha384,
-    .ctx = ssl.SHA512_CTX,
-    .init = ssl.SHA384_Init,
-    .update = ssl.SHA384_Update,
-    .final = ssl.SHA384_Final,
+const HashParams = struct {
+    const sha256 = .{
+        .digest_length = ssl.SHA256_DIGEST_LENGTH,
+        .evp = ssl.EVP_sha256,
+        .ctx = ssl.SHA256_CTX,
+        .init = ssl.SHA256_Init,
+        .update = ssl.SHA256_Update,
+        .final = ssl.SHA256_Final,
+    };
+    const sha384 = .{
+        .digest_length = ssl.SHA384_DIGEST_LENGTH,
+        .evp = ssl.EVP_sha384,
+        .ctx = ssl.SHA512_CTX,
+        .init = ssl.SHA384_Init,
+        .update = ssl.SHA384_Update,
+        .final = ssl.SHA384_Final,
+    };
+    const sha512 = .{
+        .digest_length = ssl.SHA512_DIGEST_LENGTH,
+        .evp = ssl.EVP_sha512,
+        .ctx = ssl.SHA512_CTX,
+        .init = ssl.SHA512_Init,
+        .update = ssl.SHA512_Update,
+        .final = ssl.SHA512_Final,
+    };
 };
 
 /// Blind RSA signatures with a modulus_bits modulus size
-pub fn BlindRsa(comptime modulus_bits: u16) type {
+pub fn BlindRsa(
+    comptime modulus_bits: u16,
+    comptime hash_function: enum { sha256, sha384, sha512 },
+    comptime salt_length: usize,
+) type {
     assert(modulus_bits >= 2048 and modulus_bits <= 4096);
+    const Hash = switch (hash_function) {
+        .sha256 => HashParams.sha256,
+        .sha384 => HashParams.sha384,
+        .sha512 => HashParams.sha512,
+    };
 
     return struct {
         const modulus_bytes = (modulus_bits + 7) / 8;
@@ -87,7 +115,6 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
         pub const PublicKey = struct {
             rsa: *RSA,
             mont_ctx: *BN_MONT_CTX,
-            deterministic_padding: bool = false,
 
             pub fn deinit(pk: PublicKey) void {
                 ssl.RSA_free(pk.rsa);
@@ -153,7 +180,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                     &msg_hash,
                     evp_md,
                     evp_md,
-                    if (pk.deterministic_padding) 0 else -1,
+                    salt_length,
                 ));
                 ssl.OPENSSL_cleanse(&msg_hash, msg_hash.len);
 
@@ -193,11 +220,6 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
             /// Verify a (non-blind) signature
             pub fn verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
                 return rsassa_pss_verify(pk, sig, msg);
-            }
-
-            /// Use deterministic padding (not recommended for most applications)
-            pub fn useDeterministicPadding(pk: *PublicKey, deterministic_padding: bool) void {
-                pk.deterministic_padding = deterministic_padding;
             }
 
             fn _blind(bn_ctx: *BN_CTX, padded: [modulus_bytes]u8, pk: PublicKey) !BlindingResult {
@@ -246,7 +268,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                     evp_md,
                     evp_md,
                     &em,
-                    if (pk.deterministic_padding) 0 else -1,
+                    salt_length,
                 ));
             }
         };
@@ -326,11 +348,6 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
                 const sk_ = SecretKey{ .rsa = sk };
                 return KeyPair{ .sk = sk_, .pk = try sk_.public_key() };
             }
-
-            /// Use deterministic padding (not recommended for most applications)
-            pub fn useDeterministicPadding(kp: *KeyPair, deterministic_padding: bool) void {
-                kp.pk.useDeterministicPadding(deterministic_padding);
-            }
         };
 
         fn hash(msg: []const u8) ![Hash.digest_length]u8 {
@@ -359,7 +376,7 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
 
 test "RSA blind signatures" {
     // Generate a new RSA-2048 key
-    const kp = try BlindRsa(2048).KeyPair.generate();
+    const kp = try BlindRsa(2048, .sha256, 48).KeyPair.generate();
     defer kp.deinit();
 
     const pk = kp.pk;
@@ -382,28 +399,20 @@ test "RSA blind signatures" {
 
 test "Deterministic RSA blind signatures" {
     // Generate a new RSA-2048 key
-    var kp = try BlindRsa(2048).KeyPair.generate();
+    var kp = try BlindRsa(2048, .sha256, 48).KeyPair.generate();
     defer kp.deinit();
     var pk = kp.pk;
     const sk = kp.sk;
 
     const msg = "msg";
-
-    // Use deterministic padding
-    pk.useDeterministicPadding(true);
-
     const blinding_result = try pk.blind(msg);
     const blind_sig = try sk.blind_sign(blinding_result.blind_message);
     const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
     try pk.verify(sig, msg);
-
-    // Verification without deterministic padding should fail
-    pk.useDeterministicPadding(false);
-    try std.testing.expectError(error.InternalError, pk.verify(sig, msg));
 }
 
 test "RSA export/import" {
-    const kp = try BlindRsa(3072).KeyPair.generate();
+    const kp = try BlindRsa(3072, .sha256, 48).KeyPair.generate();
     defer kp.deinit();
 
     const pk = kp.pk;
@@ -412,12 +421,12 @@ test "RSA export/import" {
     var buf: [2000]u8 = undefined;
 
     const serialized_sk = try sk.serialize(&buf);
-    const recovered_sk = try BlindRsa(3072).SecretKey.import(serialized_sk);
+    const recovered_sk = try BlindRsa(3072, .sha256, 48).SecretKey.import(serialized_sk);
     const serialized_sk2 = try recovered_sk.serialize(&buf);
     try testing.expectEqualSlices(u8, serialized_sk, serialized_sk2);
 
     const serialized_pk = try pk.serialize(&buf);
-    const recovered_pk = try BlindRsa(3072).PublicKey.import(serialized_pk);
+    const recovered_pk = try BlindRsa(3072, .sha256, 48).PublicKey.import(serialized_pk);
     const serialized_pk2 = try recovered_pk.serialize(&buf);
     try testing.expectEqualSlices(u8, serialized_pk, serialized_pk2);
 
@@ -440,7 +449,7 @@ test "Test vector" {
         .blind_sig = "364f6a40dbfbc3bbb257943337eeff791a0f290898a6791283bba581d9eac90a6376a837241f5f73a78a5c6746e1306ba3adab6067c32ff69115734ce014d354e2f259d4cbfb890244fd451a497fe6ecf9aa90d19a2d441162f7eaa7ce3fc4e89fd4e76b7ae585be2a2c0fd6fb246b8ac8d58bcb585634e30c9168a434786fe5e0b74bfe8187b47ac091aa571ffea0a864cb906d0e28c77a00e8cd8f6aba4317a8cc7bf32ce566bd1ef80c64de041728abe087bee6cadd0b7062bde5ceef308a23bd1ccc154fd0c3a26110df6193464fc0d24ee189aea8979d722170ba945fdcce9b1b4b63349980f3a92dc2e5418c54d38a862916926b3f9ca270a8cf40dfb9772bfbdd9a3e0e0892369c18249211ba857f35963d0e05d8da98f1aa0c6bba58f47487b8f663e395091275f82941830b050b260e4767ce2fa903e75ff8970c98bfb3a08d6db91ab1746c86420ee2e909bf681cac173697135983c3594b2def673736220452fde4ddec867d40ff42dd3da36c84e3e52508b891a00f50b4f62d112edb3b6b6cc3dbd546ba10f36b03f06c0d82aeec3b25e127af545fac28e1613a0517a6095ad18a98ab79f68801e05c175e15bae21f821e80c80ab4fdec6fb34ca315e194502b8f3dcf7892b511aee45060e3994cd15e003861bc7220a2babd7b40eda03382548a34a7110f9b1779bf3ef6011361611e6bc5c0dc851e1509de1a",
     };
 
-    const BRsa = BlindRsa(4096);
+    const BRsa = BlindRsa(4096, .sha384, 48);
 
     var n: ?*BIGNUM = null;
     var e: ?*BIGNUM = null;
@@ -476,7 +485,7 @@ test "Test vector" {
 
 test "Test vector generation" {
     const modulus_bits = 2048;
-    const kp = try BlindRsa(modulus_bits).KeyPair.generate();
+    const kp = try BlindRsa(modulus_bits, .sha256, 48).KeyPair.generate();
     defer kp.deinit();
     const pk = kp.pk;
     const sk = kp.sk;
