@@ -30,7 +30,7 @@ This implementation requires OpenSSL or BoringSSL.
 
 ```zig
     // [SERVER]: Generate a RSA-2048 key pair
-    const kp = try BlindRsa(2048).KeyPair.generate();
+    const kp = try BlindRsa(2048, .sha256, .non_deterministic).KeyPair.generate();
     defer kp.deinit();
     const pk = kp.pk;
     const sk = kp.sk;
