@@ -30,7 +30,7 @@ This implementation requires OpenSSL or BoringSSL.
 
 ```zig
     // [SERVER]: Generate a RSA-2048 key pair
-    const kp = try BlindRsa(2048, .sha256, .non_deterministic).KeyPair.generate();
+    const kp = try BlindRsa(2048).KeyPair.generate();
     defer kp.deinit();
     const pk = kp.pk;
     const sk = kp.sk;
@@ -56,6 +56,10 @@ This implementation requires OpenSSL or BoringSSL.
     // [SERVER]: a non-blind signature can be verified using the server's public key.
     try pk.verify(sig, msg);
 ```
+
+Deterministic padding is also supported with the `BlindRsaDeterministic` type.
+
+For specific use cases, custom hash functions and salt lengths are also accessible via the `BlindRsaCustom` type.
 
 Some helper functions are also included for key serialization and deserialization.
 
