@@ -57,9 +57,21 @@ This implementation requires OpenSSL or BoringSSL.
     try pk.verify(sig, msg);
 ```
 
-Deterministic padding is also supported with the `BlindRsaDeterministic` type.
+Deterministic padding is also supported with the `BlindRsaDeterministic` type:
+
+```zig
+const BRsa = BlindRsaDeterministic(2048);
+const kp = BRSA.KeyPair.generate();
+...
+```
 
 For specific use cases, custom hash functions and salt lengths are also accessible via the `BlindRsaCustom` type.
+
+```zig
+const BRsa = BlindRsaCustom(2048, .sha256, 48);
+const kp = BRSA.KeyPair.generate();
+...
+```
 
 Some helper functions are also included for key serialization and deserialization.
 
