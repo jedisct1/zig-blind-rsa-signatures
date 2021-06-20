@@ -4,7 +4,7 @@ const debug = std.debug;
 const fmt = std.fmt;
 const mem = std.mem;
 const ssl = @cImport({
-    @cDefine("__FILE__", "\"blindrsa.zig\"");
+    @cDefine("__FILE__", "\"blind_rsa.zig\"");
     @cDefine("__LINE__", "0");
     @cDefine("OPENSSL_API_COMPAT", "10100");
 
