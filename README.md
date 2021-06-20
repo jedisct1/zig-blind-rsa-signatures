@@ -41,7 +41,7 @@ This implementation requires OpenSSL or BoringSSL.
     var blinding_result = try pk.blind(msg);
 
     // [SERVER]: compute a signature for a blind message, to be sent to the client.
-    // THe client secret should not be sent to the server.
+    // The client secret should not be sent to the server.
     const blind_sig = try sk.blind_sign(blinding_result.blind_message);
 
     // [CLIENT]: later, when the client wants to redeem a signed blind message,
