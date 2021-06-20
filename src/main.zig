@@ -54,6 +54,28 @@ fn bn2binPadded(out: [*c]u8, out_len: usize, in: *const BIGNUM) c_int {
     return 0;
 }
 
+fn rsaRef(evp_pkey: *const EVP_PKEY) *RSA {
+    return ssl.EVP_PKEY_get0_RSA(@intToPtr(*EVP_PKEY, @ptrToInt(evp_pkey))).?;
+}
+
+fn rsaBits(evp_pkey: *const EVP_PKEY) c_int {
+    return ssl.RSA_bits(rsaRef(evp_pkey));
+}
+
+fn rsaSize(evp_pkey: *const EVP_PKEY) usize {
+    return @intCast(usize, ssl.RSA_size(rsaRef(evp_pkey)));
+}
+
+fn rsaParam(param: enum { n, e, p, q, d }, evp_pkey: *const EVP_PKEY) *const BIGNUM {
+    switch (param) {
+        .n => return ssl.RSA_get0_n(rsaRef(evp_pkey)).?,
+        .e => return ssl.RSA_get0_e(rsaRef(evp_pkey)).?,
+        .p => return ssl.RSA_get0_p(rsaRef(evp_pkey)).?,
+        .q => return ssl.RSA_get0_q(rsaRef(evp_pkey)).?,
+        .d => return ssl.RSA_get0_d(rsaRef(evp_pkey)).?,
+    }
+}
+
 const HashParams = struct {
     const sha256 = .{ .evp_fn = ssl.EVP_sha256, .salt_length = 32 };
     const sha384 = .{ .evp_fn = ssl.EVP_sha384, .salt_length = 48 };
@@ -106,27 +128,28 @@ pub fn BlindRsaCustom(
 
         /// An RSA public key
         pub const PublicKey = struct {
-            rsa: *RSA,
+            evp_pkey: *EVP_PKEY,
             mont_ctx: *BN_MONT_CTX,
 
             pub fn deinit(pk: PublicKey) void {
-                ssl.RSA_free(pk.rsa);
+                ssl.EVP_PKEY_free(pk.evp_pkey);
                 ssl.BN_MONT_CTX_free(pk.mont_ctx);
             }
 
             /// Import a serialized RSA public key
             pub fn import(der: []const u8) !PublicKey {
-                if (der.len >= 1000) {
+                const MAX_SERIALIZED_PK_LEN: usize = 1000;
+
+                if (der.len >= MAX_SERIALIZED_PK_LEN) {
                     return error.InputTooLarge;
                 }
-                var evp_pkey: ?*EVP_PKEY = null;
+                var evp_pkey_: ?*EVP_PKEY = null;
                 var der_ptr: [*c]const u8 = der.ptr;
-                try sslNTry(EVP_PKEY, ssl.d2i_PublicKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
-                defer ssl.EVP_PKEY_free(evp_pkey);
-                const pk = try sslAlloc(RSA, ssl.EVP_PKEY_get1_RSA(evp_pkey));
-                errdefer ssl.RSA_free(pk);
+                try sslNTry(EVP_PKEY, ssl.d2i_PublicKey(ssl.EVP_PKEY_RSA, &evp_pkey_, &der_ptr, @intCast(c_long, der.len)));
+                const evp_pkey = evp_pkey_.?;
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
 
-                if (ssl.RSA_bits(pk) != modulus_bits) {
+                if (rsaBits(evp_pkey) != modulus_bits) {
                     return error.UnexpectedModulus;
                 }
                 const e3: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
@@ -135,21 +158,18 @@ pub fn BlindRsaCustom(
                 const ef4: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 defer ssl.BN_free(ef4);
                 try sslTry(ssl.BN_set_word(ef4, ssl.RSA_F4));
-                if (ssl.BN_cmp(e3, ssl.RSA_get0_e(pk)) != 0 and ssl.BN_cmp(ef4, ssl.RSA_get0_e(pk)) != 0) {
+                if (ssl.BN_cmp(e3, rsaParam(.e, evp_pkey)) != 0 and ssl.BN_cmp(ef4, rsaParam(.e, evp_pkey)) != 0) {
                     return error.UnexpectedExponent;
                 }
 
-                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
-                return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
+                const mont_ctx = try new_mont_domain(rsaParam(.n, evp_pkey));
+                return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
             }
 
             /// Serialize an RSA public key
             pub fn serialize(pk: PublicKey, serialized: []u8) ![]u8 {
-                const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
-                try sslTry(ssl.EVP_PKEY_set1_RSA(evp_pkey, pk.rsa));
-                defer ssl.EVP_PKEY_free(evp_pkey);
                 var serialized_ptr: [*c]u8 = null;
-                const len = ssl.i2d_PublicKey(evp_pkey, &serialized_ptr);
+                const len = ssl.i2d_PublicKey(pk.evp_pkey, &serialized_ptr);
                 try sslNTry(u8, serialized_ptr);
                 defer ssl.OPENSSL_free(serialized_ptr);
                 if (len < 0 or len > serialized.len) {
@@ -169,7 +189,7 @@ pub fn BlindRsaCustom(
                 // PSS-MGF1 padding
                 var padded: [modulus_bytes]u8 = undefined;
                 try sslTry(ssl.RSA_padding_add_PKCS1_PSS_mgf1(
-                    pk.rsa,
+                    rsaRef(pk.evp_pkey),
                     &padded,
                     msg_hash.ptr,
                     evp_md,
@@ -203,7 +223,7 @@ pub fn BlindRsaCustom(
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&secret_s, secret_s.len, secret));
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&blind_sig, blind_sig.len, blind_z));
 
-                try sslTry(ssl.BN_mod_mul(z, blind_z, secret, ssl.RSA_get0_n(pk.rsa), bn_ctx));
+                try sslTry(ssl.BN_mod_mul(z, blind_z, secret, rsaParam(.n, pk.evp_pkey), bn_ctx));
 
                 var sig: Signature = undefined;
                 try sslTry(bn2binPadded(&sig, sig.len, z));
@@ -224,8 +244,8 @@ pub fn BlindRsaCustom(
                 const secret_inv: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 const secret: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 while (true) {
-                    try sslTry(ssl.BN_rand_range(secret_inv, ssl.RSA_get0_n(pk.rsa)));
-                    if (!(ssl.BN_is_one(secret_inv) != 0 or ssl.BN_mod_inverse(secret, secret_inv, ssl.RSA_get0_n(pk.rsa), bn_ctx) == null)) {
+                    try sslTry(ssl.BN_rand_range(secret_inv, rsaParam(.n, pk.evp_pkey)));
+                    if (!(ssl.BN_is_one(secret_inv) != 0 or ssl.BN_mod_inverse(secret, secret_inv, rsaParam(.n, pk.evp_pkey), bn_ctx) == null)) {
                         break;
                     }
                 }
@@ -233,9 +253,9 @@ pub fn BlindRsaCustom(
                 // Blind the message
                 const x: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 const blind_m: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
-                try sslTry(ssl.BN_mod_exp_mont(x, secret_inv, ssl.RSA_get0_e(pk.rsa), ssl.RSA_get0_n(pk.rsa), bn_ctx, pk.mont_ctx));
+                try sslTry(ssl.BN_mod_exp_mont(x, secret_inv, rsaParam(.e, pk.evp_pkey), rsaParam(.n, pk.evp_pkey), bn_ctx, pk.mont_ctx));
                 ssl.BN_clear(secret_inv);
-                try sslTry(ssl.BN_mod_mul(blind_m, m, x, ssl.RSA_get0_n(pk.rsa), bn_ctx));
+                try sslTry(ssl.BN_mod_mul(blind_m, m, x, rsaParam(.n, pk.evp_pkey), bn_ctx));
 
                 // Serialize the blind message
                 var blind_message: BlindMessage = undefined;
@@ -255,9 +275,9 @@ pub fn BlindRsaCustom(
                 var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
                 const msg_hash = try hash(evp_md, &msg_hash_buf, msg);
                 var em: [modulus_bytes]u8 = undefined;
-                try sslNegTry(ssl.RSA_public_decrypt(sig.len, &sig, &em, pk.rsa, ssl.RSA_NO_PADDING));
+                try sslNegTry(ssl.RSA_public_decrypt(sig.len, &sig, &em, rsaRef(pk.evp_pkey), ssl.RSA_NO_PADDING));
                 try sslTry(ssl.RSA_verify_PKCS1_PSS_mgf1(
-                    pk.rsa,
+                    rsaRef(pk.evp_pkey),
                     msg_hash.ptr,
                     evp_md,
                     evp_md,
@@ -269,10 +289,10 @@ pub fn BlindRsaCustom(
 
         /// An RSA secret key
         pub const SecretKey = struct {
-            rsa: *RSA,
+            evp_pkey: *EVP_PKEY,
 
             pub fn deinit(sk: SecretKey) void {
-                ssl.RSA_free(sk.rsa);
+                ssl.EVP_PKEY_free(sk.evp_pkey);
             }
 
             /// Import an RSA secret key
@@ -280,22 +300,17 @@ pub fn BlindRsaCustom(
                 var evp_pkey: ?*EVP_PKEY = null;
                 var der_ptr: [*c]const u8 = der.ptr;
                 try sslNTry(EVP_PKEY, ssl.d2i_PrivateKey(ssl.EVP_PKEY_RSA, &evp_pkey, &der_ptr, @intCast(c_long, der.len)));
-                defer ssl.EVP_PKEY_free(evp_pkey);
-                const sk = try sslAlloc(RSA, ssl.EVP_PKEY_get1_RSA(evp_pkey));
-                errdefer ssl.RSA_free(sk);
-                if (ssl.RSA_bits(sk) != modulus_bits) {
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
+                if (rsaBits(evp_pkey.?) != modulus_bits) {
                     return error.UnexpectedModulus;
                 }
-                return SecretKey{ .rsa = sk };
+                return SecretKey{ .evp_pkey = evp_pkey.? };
             }
 
             /// Serialize an RSA secret key
             pub fn serialize(sk: SecretKey, serialized: []u8) ![]u8 {
-                const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
-                defer ssl.EVP_PKEY_free(evp_pkey);
-                try sslTry(ssl.EVP_PKEY_set1_RSA(evp_pkey, sk.rsa));
                 var serialized_ptr: [*c]u8 = null;
-                const len = ssl.i2d_PrivateKey(evp_pkey, &serialized_ptr);
+                const len = ssl.i2d_PrivateKey(sk.evp_pkey, &serialized_ptr);
                 try sslNTry(u8, serialized_ptr);
                 defer ssl.OPENSSL_free(serialized_ptr);
                 if (len < 0 or len > serialized.len) {
@@ -307,16 +322,20 @@ pub fn BlindRsaCustom(
 
             /// Recover the public key
             pub fn public_key(sk: SecretKey) !PublicKey {
-                const pk = try sslAlloc(RSA, ssl.RSAPublicKey_dup(sk.rsa));
-                errdefer ssl.RSA_free(pk);
-                const mont_ctx = try new_mont_domain(ssl.RSA_get0_n(pk).?);
-                return PublicKey{ .rsa = pk, .mont_ctx = mont_ctx };
+                var serialized: [*c]u8 = null;
+                const serialized_len_ = ssl.i2d_PublicKey(sk.evp_pkey, &serialized);
+                if (serialized_len_ < 0) {
+                    return error.InternalError;
+                }
+                const serialized_len = @intCast(usize, serialized_len_);
+                defer ssl.OPENSSL_clear_free(serialized, serialized_len);
+                return PublicKey.import(serialized[0..serialized_len]);
             }
 
             /// Compute a blind signature
             pub fn blind_sign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
                 var blind_sig: BlindSignature = undefined;
-                try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, sk.rsa, ssl.RSA_NO_PADDING));
+                try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, rsaRef(sk.evp_pkey), ssl.RSA_NO_PADDING));
                 return blind_sig;
             }
         };
@@ -339,7 +358,9 @@ pub fn BlindRsaCustom(
                 defer ssl.BN_free(e);
                 try sslTry(ssl.BN_set_word(e, ssl.RSA_F4));
                 try sslTry(ssl.RSA_generate_key_ex(sk, modulus_bits, e, null));
-                const sk_ = SecretKey{ .rsa = sk };
+                var evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                _ = ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk);
+                const sk_ = SecretKey{ .evp_pkey = evp_pkey };
                 return KeyPair{ .sk = sk_, .pk = try sk_.public_key() };
             }
         };
@@ -470,9 +491,13 @@ test "Test vector" {
     var blinded_message: [tv.blinded_message.len / 2]u8 = undefined;
     _ = try fmt.hexToBytes(&blinded_message, tv.blinded_message);
 
-    const sk = BRsa.SecretKey{ .rsa = sk_ };
+    var sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    _ = ssl.EVP_PKEY_assign(sk_evp_pkey, ssl.EVP_PKEY_RSA, sk_);
+    const sk = BRsa.SecretKey{ .evp_pkey = sk_evp_pkey };
+    var pk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
     const pk = BRsa.PublicKey{
-        .rsa = pk_,
+        .evp_pkey = pk_evp_pkey,
         .mont_ctx = try BRsa.new_mont_domain(ssl.RSA_get0_n(pk_).?),
     };
 
@@ -489,18 +514,16 @@ test "Test vector generation" {
     defer kp.deinit();
     const pk = kp.pk;
     const sk = kp.sk;
-    const pk_ = pk.rsa;
-    const sk_ = sk.rsa;
     var p: [modulus_bits / 8 / 2]u8 = undefined;
     var q: [modulus_bits / 8 / 2]u8 = undefined;
     var n: [modulus_bits / 8]u8 = undefined;
     var d: [modulus_bits / 8]u8 = undefined;
     var e: [3]u8 = undefined;
-    try sslTry(bn2binPadded(&p, p.len, ssl.RSA_get0_p(sk_).?));
-    try sslTry(bn2binPadded(&q, q.len, ssl.RSA_get0_q(sk_).?));
-    try sslTry(bn2binPadded(&n, n.len, ssl.RSA_get0_n(sk_).?));
-    try sslTry(bn2binPadded(&d, d.len, ssl.RSA_get0_d(sk_).?));
-    try sslTry(bn2binPadded(&e, e.len, ssl.RSA_get0_e(sk_).?));
+    try sslTry(bn2binPadded(&p, p.len, rsaParam(.p, sk.evp_pkey)));
+    try sslTry(bn2binPadded(&q, q.len, rsaParam(.q, sk.evp_pkey)));
+    try sslTry(bn2binPadded(&n, n.len, rsaParam(.n, sk.evp_pkey)));
+    try sslTry(bn2binPadded(&d, d.len, rsaParam(.d, sk.evp_pkey)));
+    try sslTry(bn2binPadded(&e, e.len, rsaParam(.e, sk.evp_pkey)));
     debug.print("p: {s}\n", .{fmt.fmtSliceHexLower(&p)});
     debug.print("q: {s}\n", .{fmt.fmtSliceHexLower(&q)});
     debug.print("n: {s}\n", .{fmt.fmtSliceHexLower(&n)});
