@@ -13,6 +13,7 @@ const ssl = @cImport({
     @cInclude("openssl/rsa.h");
     @cInclude("openssl/sha.h");
     @cInclude("openssl/crypto.h");
+    @cInclude("openssl/x509.h");
 });
 const testing = std.testing;
 
@@ -23,6 +24,7 @@ const EVP_MD_CTX = ssl.EVP_MD_CTX;
 const RSA = ssl.RSA;
 const BIGNUM = ssl.BIGNUM;
 const EVP_PKEY = ssl.EVP_PKEY;
+const X509_ALGOR = ssl.X509_ALGOR;
 
 // Helpers for all the different ways OpenSSL has to return an error.
 
@@ -138,9 +140,9 @@ pub fn BlindRsaCustom(
 
             /// Import a serialized RSA public key
             pub fn import(der: []const u8) !PublicKey {
-                const MAX_SERIALIZED_PK_LEN: usize = 1000;
+                const max_serialized_pk_length: usize = 1000;
 
-                if (der.len >= MAX_SERIALIZED_PK_LEN) {
+                if (der.len >= max_serialized_pk_length) {
                     return error.InputTooLarge;
                 }
                 var evp_pkey_: ?*EVP_PKEY = null;
@@ -284,6 +286,67 @@ pub fn BlindRsaCustom(
                     &em,
                     salt_length,
                 ));
+            }
+
+            /// Maximum length of a SPKI-encoded public key in bytes
+            pub const max_spki_length: usize = 598;
+
+            /// Return the public key encoded as SPKI.
+            /// Output can be up to `max_spki_length` bytes long.
+            pub fn spki(pk: PublicKey, buf: []u8) ![]u8 {
+                const SEQ: u8 = 0x30;
+                const EXT: u8 = 0x80;
+                const CON: u8 = 0xa0;
+                const INT: u8 = 0x02;
+                const BIT: u8 = 0x03;
+                const OBJ: u8 = 0x06;
+                var tpl = [_]u8{
+                    SEQ, EXT | 2, 0, 0, // container length - offset 2
+                    SEQ, 61, // Algorithm sequence
+                    OBJ, 9, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, // Signature algorithm (RSASSA-PSS)
+                    SEQ,     48, // RSASSA-PSS parameters sequence
+                    CON | 0, 2 + 2 + 9,
+                    SEQ,     2 + 9,  OBJ, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, // Hash function - offset 21
+
+                    CON | 1, 2 + 24,
+                    SEQ, 24, OBJ, 9, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, // Padding function (MGF1) and parameters
+                    SEQ, 2 + 9, OBJ, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, // MGF1 hash function - offset 49
+
+                    CON | 2, 2 + 1, INT, 1, 0, // Salt length - offset 66
+                    BIT, EXT | 2, 0, 0, // Public key length - Bit string - offset 69
+                    0, // No partial bytes
+                };
+
+                var raw_ptr: [*c]u8 = null;
+                const raw_len = ssl.i2d_PublicKey(pk.evp_pkey, &raw_ptr);
+                try sslNTry(u8, raw_ptr);
+                var raw = raw_ptr[0..@intCast(usize, raw_len)];
+                defer ssl.OPENSSL_free(raw_ptr);
+                const container_len = tpl.len - 4 + raw.len;
+                const out_len = tpl.len + raw.len;
+                if (out_len > buf.len) {
+                    return error.Overflow;
+                }
+                var out = buf[0..out_len];
+                mem.copy(u8, out[0..tpl.len], tpl[0..]);
+                mem.copy(u8, out[tpl.len..], raw);
+                mem.writeIntBig(u16, out[2..4], @intCast(u16, container_len));
+                out[66] = @intCast(u8, salt_length);
+                mem.writeIntBig(u16, out[69..71], @intCast(u16, 1 + raw.len));
+
+                var algor_mgf1 = try sslAlloc(X509_ALGOR, ssl.X509_ALGOR_new());
+                defer ssl.X509_ALGOR_free(algor_mgf1);
+                ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
+                var algor_mgf1_s_ptr: ?*ssl.ASN1_STRING = try sslAlloc(ssl.ASN1_STRING, ssl.ASN1_STRING_new());
+                defer ssl.ASN1_STRING_free(algor_mgf1_s_ptr);
+                var alg_rptr: *const ssl.ASN1_ITEM = &ssl.X509_ALGOR_it;
+                try sslNTry(ssl.ASN1_STRING, ssl.ASN1_item_pack(algor_mgf1, alg_rptr, &algor_mgf1_s_ptr));
+                const algor_mgf1_s_len = ssl.ASN1_STRING_length(algor_mgf1_s_ptr);
+                assert(algor_mgf1_s_len == 2 + 2 + 9);
+                const algor_mgf1_s = ssl.ASN1_STRING_get0_data(algor_mgf1_s_ptr)[0..@intCast(usize, algor_mgf1_s_len)];
+                mem.copy(u8, out[21..][0..algor_mgf1_s.len], algor_mgf1_s);
+                mem.copy(u8, out[49..][0..algor_mgf1_s.len], algor_mgf1_s);
+                return out;
             }
         };
 
@@ -510,7 +573,8 @@ test "Test vector" {
 
 test "Test vector generation" {
     const modulus_bits = 2048;
-    const kp = try BlindRsa(modulus_bits).KeyPair.generate();
+    const BRsa = BlindRsa(modulus_bits);
+    const kp = try BRsa.KeyPair.generate();
     defer kp.deinit();
     const pk = kp.pk;
     const sk = kp.sk;
@@ -541,4 +605,11 @@ test "Test vector generation" {
 
     const sig = try pk.finalize(blind_sig, blinded_msg.secret, msg);
     debug.print("sig: {s}\n", .{fmt.fmtSliceHexLower(&sig)});
+
+    var spki_buf: [BRsa.PublicKey.max_spki_length]u8 = undefined;
+    const spki = try pk.spki(&spki_buf);
+    const encoder = std.base64.standard_encoder;
+    var b64_buf: [encoder.calcSize(spki_buf.len)]u8 = undefined;
+    const b64 = encoder.encode(&b64_buf, spki);
+    debug.print("spki: {s}\n", .{b64});
 }
