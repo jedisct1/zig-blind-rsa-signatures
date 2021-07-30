@@ -164,7 +164,7 @@ pub fn BlindRsaCustom(
                     return error.UnexpectedExponent;
                 }
 
-                const mont_ctx = try new_mont_domain(rsaParam(.n, evp_pkey));
+                const mont_ctx = try newMontDomain(rsaParam(.n, evp_pkey));
                 return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
             }
 
@@ -235,7 +235,7 @@ pub fn BlindRsaCustom(
 
             /// Verify a (non-blind) signature
             pub fn verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
-                return rsassa_pss_verify(pk, sig, msg);
+                return rsaSsaPssVerify(pk, sig, msg);
             }
 
             fn _blind(bn_ctx: *BN_CTX, padded: [modulus_bytes]u8, pk: PublicKey) !BlindingResult {
@@ -272,7 +272,7 @@ pub fn BlindRsaCustom(
                 };
             }
 
-            fn rsassa_pss_verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
+            fn rsaSsaPssVerify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
                 const evp_md = Hash.evp_fn().?;
                 var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
                 const msg_hash = try hash(evp_md, &msg_hash_buf, msg);
@@ -384,7 +384,7 @@ pub fn BlindRsaCustom(
             }
 
             /// Recover the public key
-            pub fn public_key(sk: SecretKey) !PublicKey {
+            pub fn publicKey(sk: SecretKey) !PublicKey {
                 var serialized: [*c]u8 = null;
                 const serialized_len_ = ssl.i2d_PublicKey(sk.evp_pkey, &serialized);
                 if (serialized_len_ < 0) {
@@ -396,7 +396,7 @@ pub fn BlindRsaCustom(
             }
 
             /// Compute a blind signature
-            pub fn blind_sign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
+            pub fn blindSign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
                 var blind_sig: BlindSignature = undefined;
                 try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, rsaRef(sk.evp_pkey), ssl.RSA_NO_PADDING));
                 return blind_sig;
@@ -424,7 +424,7 @@ pub fn BlindRsaCustom(
                 var evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
                 _ = ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk);
                 const sk_ = SecretKey{ .evp_pkey = evp_pkey };
-                return KeyPair{ .sk = sk_, .pk = try sk_.public_key() };
+                return KeyPair{ .sk = sk_, .pk = try sk_.publicKey() };
             }
         };
 
@@ -443,7 +443,7 @@ pub fn BlindRsaCustom(
             return h[0..len];
         }
 
-        fn new_mont_domain(n: *const BIGNUM) !*BN_MONT_CTX {
+        fn newMontDomain(n: *const BIGNUM) !*BN_MONT_CTX {
             const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
             errdefer ssl.BN_MONT_CTX_free(mont_ctx);
             const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
@@ -472,7 +472,7 @@ test "RSA blind signatures" {
     const blinding_result = try pk.blind(msg);
 
     // Compute a blind signature
-    const blind_sig = try sk.blind_sign(blinding_result.blind_message);
+    const blind_sig = try sk.blindSign(blinding_result.blind_message);
 
     // Compute the signature for the original message
     const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
@@ -490,7 +490,7 @@ test "Deterministic RSA blind signatures" {
 
     const msg = "msg";
     const blinding_result = try pk.blind(msg);
-    const blind_sig = try sk.blind_sign(blinding_result.blind_message);
+    const blind_sig = try sk.blindSign(blinding_result.blind_message);
     const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
     try pk.verify(sig, msg);
 }
@@ -514,7 +514,7 @@ test "RSA export/import" {
     const serialized_pk2 = try recovered_pk.serialize(&buf);
     try testing.expectEqualSlices(u8, serialized_pk, serialized_pk2);
 
-    const recovered_pk2 = try sk.public_key();
+    const recovered_pk2 = try sk.publicKey();
     const serialized_pk3 = try recovered_pk2.serialize(&buf);
     try testing.expectEqualSlices(u8, serialized_pk, serialized_pk3);
 }
@@ -561,13 +561,13 @@ test "Test vector" {
     _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
     const pk = BRsa.PublicKey{
         .evp_pkey = pk_evp_pkey,
-        .mont_ctx = try BRsa.new_mont_domain(ssl.RSA_get0_n(pk_).?),
+        .mont_ctx = try BRsa.newMontDomain(ssl.RSA_get0_n(pk_).?),
     };
 
     const sig = try pk.finalize(blind_sig, secret, &msg);
     try pk.verify(sig, &msg);
 
-    const computed_blind_sig = try sk.blind_sign(blinded_message);
+    const computed_blind_sig = try sk.blindSign(blinded_message);
     try testing.expectEqualSlices(u8, computed_blind_sig[0..], blind_sig[0..]);
 }
 
@@ -600,7 +600,7 @@ test "Test vector generation" {
     debug.print("inv: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.secret)});
     debug.print("blinded_message: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.blind_message)});
 
-    const blind_sig = try sk.blind_sign(blinded_msg.blind_message);
+    const blind_sig = try sk.blindSign(blinded_msg.blind_message);
     debug.print("blind_sig: {s}\n", .{fmt.fmtSliceHexLower(&blind_sig)});
 
     const sig = try pk.finalize(blind_sig, blinded_msg.secret, msg);
