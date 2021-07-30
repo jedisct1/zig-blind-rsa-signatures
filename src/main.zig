@@ -396,6 +396,14 @@ pub fn BlindRsaCustom(
 
             /// Compute a blind signature
             pub fn blindSign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
+                const n = rsaParam(.n, sk.evp_pkey);
+                var n_s: [blind_message.len]u8 = undefined;
+                try sslTry(bn2binPadded(&n_s, n_s.len, n));
+                for (blind_message) |a, i| {
+                    const b = n_s[i];
+                    if (a > b) return error.NonCanonicalBlindMessage;
+                    if (a < b) break;
+                }
                 var blind_sig: BlindSignature = undefined;
                 try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, rsaRef(sk.evp_pkey), ssl.RSA_NO_PADDING));
                 return blind_sig;
