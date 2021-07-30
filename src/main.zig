@@ -91,7 +91,6 @@ pub fn BlindRsa(comptime modulus_bits: u16) type {
 }
 
 /// Blind RSA signatures with a `modulus_bits` modulus size.
-/// and the specified hash functions both for message hashing and padding.
 /// Non-deterministic padding is recommended for most applications.
 pub fn BlindRsaDeterministic(comptime modulus_bits: u16) type {
     return BlindRsaCustom(modulus_bits, .sha384, 0);
