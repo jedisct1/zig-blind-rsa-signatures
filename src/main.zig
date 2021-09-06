@@ -436,8 +436,7 @@ pub fn BlindRsaCustom(
         };
 
         fn saltLength() usize {
-            if (deterministic == .deterministic) return 0;
-            return @intCast(usize, ssl.EVP_MD_size(Hash.evp_fn().?));
+            return salt_length;
         }
 
         fn hash(evp: *const EVP_MD, h: *[ssl.EVP_MAX_MD_SIZE]u8, msg: []const u8) ![]u8 {
