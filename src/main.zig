@@ -349,8 +349,8 @@ pub fn BlindRsaCustom(
                     assert(algor_mgf1_s_len == mgf1_s_data.len + 2); // Trailing NUL
                     assert(algor_mgf1_s[1] == mgf1_s_data.len and algor_mgf1_s[3] == 9 and
                         algor_mgf1_s[mgf1_s_data.len] == 5 and algor_mgf1_s[mgf1_s_data.len + 1] == 0);
-                    mgf1_s_data[1] -= 2;
                     mem.copy(u8, &mgf1_s_data, algor_mgf1_s[0..mgf1_s_data.len]);
+                    mgf1_s_data[1] -= 2;
                 }
                 mem.copy(u8, out[21..][0..mgf1_s_data.len], &mgf1_s_data);
                 mem.copy(u8, out[49..][0..mgf1_s_data.len], &mgf1_s_data);
