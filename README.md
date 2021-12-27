@@ -79,3 +79,4 @@ Some helper functions are also included for key serialization and deserializatio
 
 * [Rust](https://github.com/jedisct1/rust-blind-rsa-signatures)
 * [C](https://github.com/jedisct1/blind-rsa-signatures)
+* [Go](https://github.com/cloudflare/circl/tree/master/blindsign)
