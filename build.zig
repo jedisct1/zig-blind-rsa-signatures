@@ -10,8 +10,10 @@ pub fn build(b: *Builder) void {
     var main_tests = b.addTest("src/main.zig");
     main_tests.addSystemIncludeDir("/usr/local/opt/openssl/include");
     main_tests.addSystemIncludeDir("/usr/local/openssl/include");
+    main_tests.addSystemIncludeDir("/opt/homebrew/opt/openssl@1.1/include");
     main_tests.addLibPath("/usr/local/opt/openssl/lib");
     main_tests.addLibPath("/usr/local/openssl/lib");
+    main_tests.addLibPath("/opt/homebrew/opt/openssl@1.1/lib");
     main_tests.linkSystemLibrary("crypto");
     main_tests.setBuildMode(mode);
 

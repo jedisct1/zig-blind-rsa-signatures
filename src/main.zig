@@ -310,7 +310,6 @@ pub fn BlindRsaCustom(
                     CON | 1, 2 + 24,
                     SEQ, 24, OBJ, 9, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, // Padding function (MGF1) and parameters
                     SEQ, 2 + 9, OBJ, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, // MGF1 hash function - offset 49
-
                     CON | 2, 2 + 1, INT, 1, 0, // Salt length - offset 66
                     BIT, EXT | 2, 0, 0, // Public key length - Bit string - offset 69
                     0, // No partial bytes
