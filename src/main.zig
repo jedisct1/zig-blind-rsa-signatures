@@ -622,7 +622,7 @@ test "Test vector generation" {
 
     var spki_buf: [BRsa.PublicKey.max_spki_length]u8 = undefined;
     const spki = try pk.spki(&spki_buf);
-    const encoder = std.base64.standard_encoder;
+    const encoder = std.base64.standard.Encoder;
     var b64_buf: [encoder.calcSize(spki_buf.len)]u8 = undefined;
     const b64 = encoder.encode(&b64_buf, spki);
     debug.print("spki: {s}\n", .{b64});
