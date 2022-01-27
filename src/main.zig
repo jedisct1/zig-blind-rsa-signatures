@@ -180,7 +180,6 @@ pub fn BlindRsaCustom(
                 defer ssl.X509_PUBKEY_free(x509_pkey);
 
                 const evp_pkey: *EVP_PKEY = try sslAlloc(ssl.EVP_PKEY, ssl.X509_PUBKEY_get(x509_pkey));
-                defer ssl.EVP_PKEY_free(evp_pkey);
 
                 if (rsaBits(evp_pkey) != modulus_bits) {
                     return error.UnexpectedModulus;
