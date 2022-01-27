@@ -167,10 +167,59 @@ pub fn BlindRsaCustom(
                 return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
             }
 
+            pub fn import_der(der: []const u8) !PublicKey {
+                const max_serialized_pk_length: usize = 1000;
+
+                if (der.len >= max_serialized_pk_length) {
+                    return error.InputTooLarge;
+                }
+                var x509_pkey: ?*ssl.X509_PUBKEY = null;
+
+                var der_ptr: [*c]const u8 = der.ptr;
+                try sslNTry(ssl.X509_PUBKEY, ssl.d2i_X509_PUBKEY(&x509_pkey, &der_ptr, @intCast(c_long, der.len)));
+                defer ssl.X509_PUBKEY_free(x509_pkey);
+
+                const evp_pkey: *EVP_PKEY = try sslAlloc(ssl.EVP_PKEY, ssl.X509_PUBKEY_get(x509_pkey));
+                defer ssl.EVP_PKEY_free(evp_pkey);
+
+                if (rsaBits(evp_pkey) != modulus_bits) {
+                    return error.UnexpectedModulus;
+                }
+                const e3: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(e3);
+                try sslTry(ssl.BN_set_word(e3, ssl.RSA_3));
+                const ef4: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(ef4);
+                try sslTry(ssl.BN_set_word(ef4, ssl.RSA_F4));
+                if (ssl.BN_cmp(e3, rsaParam(.e, evp_pkey)) != 0 and ssl.BN_cmp(ef4, rsaParam(.e, evp_pkey)) != 0) {
+                    return error.UnexpectedExponent;
+                }
+
+                const mont_ctx = try newMontDomain(rsaParam(.n, evp_pkey));
+                return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
+            }
+
             /// Serialize an RSA public key
             pub fn serialize(pk: PublicKey, serialized: []u8) ![]u8 {
                 var serialized_ptr: [*c]u8 = null;
                 const len = ssl.i2d_PublicKey(pk.evp_pkey, &serialized_ptr);
+                try sslNTry(u8, serialized_ptr);
+                defer ssl.OPENSSL_free(serialized_ptr);
+                if (len < 0 or len > serialized.len) {
+                    return error.Overflow;
+                }
+                mem.copy(u8, serialized, @ptrCast([*]const u8, serialized_ptr.?)[0..@intCast(usize, len)]);
+                return serialized[0..@intCast(usize, len)];
+            }
+
+            /// Serialize an RSA public key
+            pub fn serialize_der(pk: PublicKey, serialized: []u8) ![]u8 {
+                var x509_pkey = ssl.X509_PUBKEY_new();
+                try sslTry(ssl.X509_PUBKEY_set(&x509_pkey, pk.evp_pkey));
+                defer ssl.X509_PUBKEY_free(x509_pkey);
+
+                var serialized_ptr: [*c]u8 = null;
+                const len = ssl.i2d_X509_PUBKEY(x509_pkey, &serialized_ptr);
                 try sslNTry(u8, serialized_ptr);
                 defer ssl.OPENSSL_free(serialized_ptr);
                 if (len < 0 or len > serialized.len) {
@@ -510,7 +559,7 @@ test "Deterministic RSA blind signatures" {
 }
 
 test "RSA export/import" {
-    const kp = try BlindRsaCustom(3072, .sha256, 32).KeyPair.generate();
+    const kp = try BlindRsaCustom(2048, .sha256, 32).KeyPair.generate();
     defer kp.deinit();
 
     const pk = kp.pk;
@@ -519,12 +568,12 @@ test "RSA export/import" {
     var buf: [2000]u8 = undefined;
 
     const serialized_sk = try sk.serialize(&buf);
-    const recovered_sk = try BlindRsa(3072).SecretKey.import(serialized_sk);
+    const recovered_sk = try BlindRsa(2048).SecretKey.import(serialized_sk);
     const serialized_sk2 = try recovered_sk.serialize(&buf);
     try testing.expectEqualSlices(u8, serialized_sk, serialized_sk2);
 
     const serialized_pk = try pk.serialize(&buf);
-    const recovered_pk = try BlindRsa(3072).PublicKey.import(serialized_pk);
+    const recovered_pk = try BlindRsa(2048).PublicKey.import(serialized_pk);
     const serialized_pk2 = try recovered_pk.serialize(&buf);
     try testing.expectEqualSlices(u8, serialized_pk, serialized_pk2);
 
@@ -626,4 +675,20 @@ test "Test vector generation" {
     var b64_buf: [encoder.calcSize(spki_buf.len)]u8 = undefined;
     const b64 = encoder.encode(&b64_buf, spki);
     debug.print("spki: {s}\n", .{b64});
+}
+
+test "import/export" {
+    const modulus_bits = 2048;
+    const BRsa = BlindRsa(modulus_bits);
+
+    var kp = try BRsa.KeyPair.generate();
+    defer kp.deinit();
+
+    var buf: [1024]u8 = undefined;
+
+    const der = try kp.pk.serialize_der(&buf);
+    _ = try BRsa.PublicKey.import_der(der);
+
+    const pem = try kp.pk.serialize(&buf);
+    _ = try BRsa.PublicKey.import(pem);
 }
