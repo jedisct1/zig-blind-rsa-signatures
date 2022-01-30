@@ -138,15 +138,15 @@ pub fn BlindRsaCustom(
             }
 
             /// Import a serialized RSA public key
-            pub fn import(der: []const u8) !PublicKey {
+            pub fn import(raw: []const u8) !PublicKey {
                 const max_serialized_pk_length: usize = 1000;
 
-                if (der.len >= max_serialized_pk_length) {
+                if (raw.len >= max_serialized_pk_length) {
                     return error.InputTooLarge;
                 }
                 var evp_pkey_: ?*EVP_PKEY = null;
-                var der_ptr: [*c]const u8 = der.ptr;
-                try sslNTry(EVP_PKEY, ssl.d2i_PublicKey(ssl.EVP_PKEY_RSA, &evp_pkey_, &der_ptr, @intCast(c_long, der.len)));
+                var der_ptr: [*c]const u8 = raw.ptr;
+                try sslNTry(EVP_PKEY, ssl.d2i_PublicKey(ssl.EVP_PKEY_RSA, &evp_pkey_, &der_ptr, @intCast(c_long, raw.len)));
                 const evp_pkey = evp_pkey_.?;
                 errdefer ssl.EVP_PKEY_free(evp_pkey);
 
@@ -338,16 +338,14 @@ pub fn BlindRsaCustom(
             /// Maximum length of a SPKI-encoded public key in bytes
             pub const max_spki_length: usize = 598;
 
-            /// Return the public key encoded as SPKI.
-            /// Output can be up to `max_spki_length` bytes long.
-            pub fn spki(pk: PublicKey, buf: []u8) ![]u8 {
+            const spki_tpl = tpl: {
                 const SEQ: u8 = 0x30;
                 const EXT: u8 = 0x80;
                 const CON: u8 = 0xa0;
                 const INT: u8 = 0x02;
                 const BIT: u8 = 0x03;
                 const OBJ: u8 = 0x06;
-                var tpl = [_]u8{
+                break :tpl [72]u8{
                     SEQ, EXT | 2, 0, 0, // container length - offset 2
                     SEQ, 61, // Algorithm sequence
                     OBJ, 9, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, // Signature algorithm (RSASSA-PSS)
@@ -362,20 +360,24 @@ pub fn BlindRsaCustom(
                     BIT, EXT | 2, 0, 0, // Public key length - Bit string - offset 69
                     0, // No partial bytes
                 };
+            };
 
+            /// Return the public key encoded as SPKI.
+            /// Output can be up to `max_spki_length` bytes long.
+            pub fn serialize_spki(pk: PublicKey, buf: []u8) ![]u8 {
                 var raw_ptr: [*c]u8 = null;
                 const raw_len = ssl.i2d_PublicKey(pk.evp_pkey, &raw_ptr);
                 try sslNTry(u8, raw_ptr);
                 var raw = raw_ptr[0..@intCast(usize, raw_len)];
                 defer ssl.OPENSSL_free(raw_ptr);
-                const container_len = tpl.len - 4 + raw.len;
-                const out_len = tpl.len + raw.len;
+                const container_len = spki_tpl.len - 4 + raw.len;
+                const out_len = spki_tpl.len + raw.len;
                 if (out_len > buf.len) {
                     return error.Overflow;
                 }
                 var out = buf[0..out_len];
-                mem.copy(u8, out[0..tpl.len], tpl[0..]);
-                mem.copy(u8, out[tpl.len..], raw);
+                mem.copy(u8, out[0..spki_tpl.len], spki_tpl[0..]);
+                mem.copy(u8, out[spki_tpl.len..], raw);
                 mem.writeIntBig(u16, out[2..4], @intCast(u16, container_len));
                 out[66] = @intCast(u8, salt_length);
                 mem.writeIntBig(u16, out[69..71], @intCast(u16, 1 + raw.len));
@@ -402,6 +404,20 @@ pub fn BlindRsaCustom(
                 mem.copy(u8, out[21..][0..mgf1_s_data.len], &mgf1_s_data);
                 mem.copy(u8, out[49..][0..mgf1_s_data.len], &mgf1_s_data);
                 return out;
+            }
+
+            pub fn import_spki(bytes: []const u8) !PublicKey {
+                if (bytes.len > max_spki_length + 100) {
+                    return error.InputTooLarge;
+                }
+                if (!mem.eql(u8, bytes[6..18], spki_tpl[6..18])) {
+                    return error.IncompatibleAlgorithm;
+                }
+                const alg_len: usize = bytes[5];
+                if (bytes.len <= alg_len + 11) {
+                    return error.InputTooShort;
+                }
+                return import(bytes[alg_len + 11 ..]);
             }
         };
 
@@ -669,11 +685,15 @@ test "Test vector generation" {
     debug.print("sig: {s}\n", .{fmt.fmtSliceHexLower(&sig)});
 
     var spki_buf: [BRsa.PublicKey.max_spki_length]u8 = undefined;
-    const spki = try pk.spki(&spki_buf);
+    const spki = try pk.serialize_spki(&spki_buf);
     const encoder = std.base64.standard.Encoder;
     var b64_buf: [encoder.calcSize(spki_buf.len)]u8 = undefined;
     const b64 = encoder.encode(&b64_buf, spki);
     debug.print("spki: {s}\n", .{b64});
+
+    const pk2 = try BRsa.PublicKey.import_spki(spki);
+    const spki2 = try pk2.serialize_spki(&spki_buf);
+    try testing.expectEqualSlices(u8, spki, spki2);
 }
 
 test "import/export" {
