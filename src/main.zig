@@ -410,6 +410,9 @@ pub fn BlindRsaCustom(
                 if (bytes.len > max_spki_length + 100) {
                     return error.InputTooLarge;
                 }
+                if (bytes.len < spki_tpl.len) {
+                    return error.InvalidInput;
+                }
                 if (!mem.eql(u8, bytes[6..18], spki_tpl[6..18])) {
                     return error.IncompatibleAlgorithm;
                 }
