@@ -51,24 +51,24 @@ This implementation requires OpenSSL or BoringSSL.
     // server cannot link it to a previous(blinded message, blind signature) pair.
     // Note that the finalization function also verifies that the new signature
     // is correct for the server public key.
-    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg, blinding_result.msg_salt);
+    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
 
     // [SERVER]: a non-blind signature can be verified using the server's public key.
-    try pk.verify(sig, msg, blinding_result.msg_salt);
+    try pk.verify(sig, msg);
 ```
 
-If the input has high entropy, the unsalted variant can be used instead via the `BlindRsaForHighEntropyInput` type:
+Deterministic padding is also supported with the `BlindRsaDeterministic` type:
 
 ```zig
-const BRsa = BlindRsaForHighEntropyInput(2048);
+const BRsa = BlindRsaDeterministic(2048);
 const kp = BRSA.KeyPair.generate();
 ...
 ```
 
-For specific use cases, custom hash functions, salt lengths and message salt lengths are also accessible via the `BlindRsaCustom` type.
+For specific use cases, custom hash functions and salt lengths are also accessible via the `BlindRsaCustom` type.
 
 ```zig
-const BRsa = BlindRsaCustom(2048, .sha256, 48, 32);
+const BRsa = BlindRsaCustom(2048, .sha256, 48);
 const kp = BRSA.KeyPair.generate();
 ...
 ```

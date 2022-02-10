@@ -1,6 +1,5 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const random = std.crypto.random;
 const debug = std.debug;
 const fmt = std.fmt;
 const mem = std.mem;
@@ -80,20 +79,21 @@ fn rsaParam(param: enum { n, e, p, q, d }, evp_pkey: *const EVP_PKEY) *const BIG
 }
 
 const HashParams = struct {
-    const sha256 = .{ .evp_fn = ssl.EVP_sha256, .salt_length = 32, .msg_salt_length = 32 };
-    const sha384 = .{ .evp_fn = ssl.EVP_sha384, .salt_length = 48, .msg_salt_length = 32 };
-    const sha512 = .{ .evp_fn = ssl.EVP_sha512, .salt_length = 64, .msg_salt_length = 32 };
+    const sha256 = .{ .evp_fn = ssl.EVP_sha256, .salt_length = 32 };
+    const sha384 = .{ .evp_fn = ssl.EVP_sha384, .salt_length = 48 };
+    const sha512 = .{ .evp_fn = ssl.EVP_sha512, .salt_length = 64 };
 };
 
 /// Standard blind RSA signatures with a `modulus_bits` modulus size.
 /// Recommended for most applications.
 pub fn BlindRsa(comptime modulus_bits: u16) type {
-    return BlindRsaCustom(modulus_bits, .sha384, HashParams.sha384.salt_length, HashParams.sha384.msg_salt_length);
+    return BlindRsaCustom(modulus_bits, .sha384, HashParams.sha384.salt_length);
 }
 
-/// Blind RSA signatures with high-entropy input and a `modulus_bits` modulus size.
-pub fn BlindRsaWithHighEntropyInput(comptime modulus_bits: u16) type {
-    return BlindRsaCustom(modulus_bits, .sha384, HashParams.sha384.salt_length, 0);
+/// Blind RSA signatures with a `modulus_bits` modulus size.
+/// Non-deterministic padding is recommended for most applications.
+pub fn BlindRsaDeterministic(comptime modulus_bits: u16) type {
+    return BlindRsaCustom(modulus_bits, .sha384, 0);
 }
 
 /// Blind RSA signatures with custom parameters.
@@ -101,10 +101,8 @@ pub fn BlindRsaCustom(
     comptime modulus_bits: u16,
     comptime hash_function: enum { sha256, sha384, sha512 },
     comptime salt_length: usize,
-    comptime msg_salt_length: usize,
 ) type {
     assert(modulus_bits >= 2048 and modulus_bits <= 4096);
-    assert(msg_salt_length == 0 or msg_salt_length >= 16);
     const Hash = switch (hash_function) {
         .sha256 => HashParams.sha256,
         .sha384 => HashParams.sha384,
@@ -126,15 +124,8 @@ pub fn BlindRsaCustom(
         /// A (non-blind) signature
         pub const Signature = [modulus_bytes]u8;
 
-        /// A message salt
-        pub const MessageSalt = [msg_salt_length]u8;
-
         /// The result of a blinding operation
-        pub const BlindingResult = struct {
-            blind_message: BlindMessage,
-            secret: Secret,
-            msg_salt: ?MessageSalt,
-        };
+        pub const BlindingResult = struct { blind_message: BlindMessage, secret: Secret };
 
         /// An RSA public key
         pub const PublicKey = struct {
@@ -239,23 +230,10 @@ pub fn BlindRsaCustom(
 
             /// Blind a message and return the random blinding secret and the blind message
             pub fn blind(pk: PublicKey, msg: []const u8) !BlindingResult {
-                const evp_md = Hash.evp_fn().?;
-
-                var msg_salt_buf: MessageSalt = undefined;
-                var msg_salt: ?MessageSalt = null;
-                var hash_input = msg;
-
-                // Prehash the message, mixing the message salt in
-                if (msg_salt_length > 0) {
-                    random.bytes(&msg_salt_buf);
-                    msg_salt = msg_salt_buf;
-                    var msg_prehashed_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
-                    hash_input = try hash2(evp_md, &msg_prehashed_buf, &msg_salt_buf, msg);
-                }
-
                 // Compute H(msg)
+                const evp_md = Hash.evp_fn().?;
                 var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
-                const msg_hash = try hash(evp_md, &msg_hash_buf, hash_input);
+                const msg_hash = try hash(evp_md, &msg_hash_buf, msg);
 
                 // PSS-MGF1 padding
                 var padded: [modulus_bytes]u8 = undefined;
@@ -276,11 +254,11 @@ pub fn BlindRsaCustom(
                     ssl.BN_CTX_end(bn_ctx);
                     ssl.BN_CTX_free(bn_ctx);
                 }
-                return _blind(bn_ctx, padded, pk, msg_salt);
+                return _blind(bn_ctx, padded, pk);
             }
 
             /// Compute a signature for the original message
-            pub fn finalize(pk: PublicKey, blind_sig: BlindSignature, secret_s: Secret, msg: []const u8, msg_salt: ?MessageSalt) !Signature {
+            pub fn finalize(pk: PublicKey, blind_sig: BlindSignature, secret_s: Secret, msg: []const u8) !Signature {
                 const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
                 ssl.BN_CTX_start(bn_ctx);
                 defer {
@@ -298,25 +276,16 @@ pub fn BlindRsaCustom(
 
                 var sig: Signature = undefined;
                 try sslTry(bn2binPadded(&sig, sig.len, z));
-                try verify(pk, sig, msg, msg_salt);
+                try verify(pk, sig, msg);
                 return sig;
             }
 
             /// Verify a (non-blind) signature
-            pub fn verify(pk: PublicKey, sig: Signature, msg: []const u8, msg_salt: ?MessageSalt) !void {
-                // Prehash the message, mixing the message salt in
-                const evp_md = Hash.evp_fn().?;
-
-                if (msg_salt) |s| {
-                    var msg_prehashed_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
-                    const msg_prehashed = try hash2(evp_md, &msg_prehashed_buf, &s, msg);
-                    return rsaSsaPssVerify(pk, sig, msg_prehashed);
-                } else {
-                    return rsaSsaPssVerify(pk, sig, msg);
-                }
+            pub fn verify(pk: PublicKey, sig: Signature, msg: []const u8) !void {
+                return rsaSsaPssVerify(pk, sig, msg);
             }
 
-            fn _blind(bn_ctx: *BN_CTX, padded: [modulus_bytes]u8, pk: PublicKey, msg_salt: ?MessageSalt) !BlindingResult {
+            fn _blind(bn_ctx: *BN_CTX, padded: [modulus_bytes]u8, pk: PublicKey) !BlindingResult {
                 const m: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&padded, padded.len, m));
 
@@ -347,7 +316,6 @@ pub fn BlindRsaCustom(
                 return BlindingResult{
                     .blind_message = blind_message,
                     .secret = secret_s,
-                    .msg_salt = msg_salt,
                 };
             }
 
@@ -546,21 +514,14 @@ pub fn BlindRsaCustom(
             return salt_length;
         }
 
-        fn hash2(evp: *const EVP_MD, h: *[ssl.EVP_MAX_MD_SIZE]u8, prefix: ?[]const u8, msg: []const u8) ![]u8 {
+        fn hash(evp: *const EVP_MD, h: *[ssl.EVP_MAX_MD_SIZE]u8, msg: []const u8) ![]u8 {
             const len = @intCast(usize, ssl.EVP_MD_size(evp));
             debug.assert(h.len >= len);
             var hash_ctx = try sslAlloc(EVP_MD_CTX, ssl.EVP_MD_CTX_new());
             try sslTry(ssl.EVP_DigestInit(hash_ctx, evp));
-            if (prefix) |p| {
-                try sslTry(ssl.EVP_DigestUpdate(hash_ctx, p.ptr, p.len));
-            }
             try sslTry(ssl.EVP_DigestUpdate(hash_ctx, msg.ptr, msg.len));
             try sslTry(ssl.EVP_DigestFinal_ex(hash_ctx, h, null));
             return h[0..len];
-        }
-
-        fn hash(evp: *const EVP_MD, h: *[ssl.EVP_MAX_MD_SIZE]u8, msg: []const u8) ![]u8 {
-            return hash2(evp, h, null, msg);
         }
 
         fn newMontDomain(n: *const BIGNUM) !*BN_MONT_CTX {
@@ -595,15 +556,15 @@ test "RSA blind signatures" {
     const blind_sig = try sk.blindSign(blinding_result.blind_message);
 
     // Compute the signature for the original message
-    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg, blinding_result.msg_salt);
+    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
 
     // Verify the non-blind signature
-    try pk.verify(sig, msg, blinding_result.msg_salt);
+    try pk.verify(sig, msg);
 }
 
-test "RSA blind signatures with high-entropy input" {
+test "Deterministic RSA blind signatures" {
     // Generate a new RSA-2048 key
-    var kp = try BlindRsaWithHighEntropyInput(2048).KeyPair.generate();
+    var kp = try BlindRsaDeterministic(2048).KeyPair.generate();
     defer kp.deinit();
     var pk = kp.pk;
     const sk = kp.sk;
@@ -611,12 +572,12 @@ test "RSA blind signatures with high-entropy input" {
     const msg = "msg";
     const blinding_result = try pk.blind(msg);
     const blind_sig = try sk.blindSign(blinding_result.blind_message);
-    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg, blinding_result.msg_salt);
-    try pk.verify(sig, msg, blinding_result.msg_salt);
+    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
+    try pk.verify(sig, msg);
 }
 
 test "RSA export/import" {
-    const kp = try BlindRsaCustom(2048, .sha256, 32, 32).KeyPair.generate();
+    const kp = try BlindRsaCustom(2048, .sha256, 32).KeyPair.generate();
     defer kp.deinit();
 
     const pk = kp.pk;
@@ -653,7 +614,7 @@ test "Test vector" {
         .blind_sig = "364f6a40dbfbc3bbb257943337eeff791a0f290898a6791283bba581d9eac90a6376a837241f5f73a78a5c6746e1306ba3adab6067c32ff69115734ce014d354e2f259d4cbfb890244fd451a497fe6ecf9aa90d19a2d441162f7eaa7ce3fc4e89fd4e76b7ae585be2a2c0fd6fb246b8ac8d58bcb585634e30c9168a434786fe5e0b74bfe8187b47ac091aa571ffea0a864cb906d0e28c77a00e8cd8f6aba4317a8cc7bf32ce566bd1ef80c64de041728abe087bee6cadd0b7062bde5ceef308a23bd1ccc154fd0c3a26110df6193464fc0d24ee189aea8979d722170ba945fdcce9b1b4b63349980f3a92dc2e5418c54d38a862916926b3f9ca270a8cf40dfb9772bfbdd9a3e0e0892369c18249211ba857f35963d0e05d8da98f1aa0c6bba58f47487b8f663e395091275f82941830b050b260e4767ce2fa903e75ff8970c98bfb3a08d6db91ab1746c86420ee2e909bf681cac173697135983c3594b2def673736220452fde4ddec867d40ff42dd3da36c84e3e52508b891a00f50b4f62d112edb3b6b6cc3dbd546ba10f36b03f06c0d82aeec3b25e127af545fac28e1613a0517a6095ad18a98ab79f68801e05c175e15bae21f821e80c80ab4fdec6fb34ca315e194502b8f3dcf7892b511aee45060e3994cd15e003861bc7220a2babd7b40eda03382548a34a7110f9b1779bf3ef6011361611e6bc5c0dc851e1509de1a",
     };
 
-    const BRsa = BlindRsaWithHighEntropyInput(4096);
+    const BRsa = BlindRsa(4096);
 
     var n: ?*BIGNUM = null;
     var e: ?*BIGNUM = null;
@@ -684,8 +645,8 @@ test "Test vector" {
         .mont_ctx = try BRsa.newMontDomain(ssl.RSA_get0_n(pk_).?),
     };
 
-    const sig = try pk.finalize(blind_sig, secret, &msg, null);
-    try pk.verify(sig, &msg, null);
+    const sig = try pk.finalize(blind_sig, secret, &msg);
+    try pk.verify(sig, &msg);
 
     const computed_blind_sig = try sk.blindSign(blinded_message);
     try testing.expectEqualSlices(u8, computed_blind_sig[0..], blind_sig[0..]);
@@ -719,12 +680,11 @@ test "Test vector generation" {
     const blinded_msg = try pk.blind(msg);
     debug.print("inv: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.secret)});
     debug.print("blinded_message: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.blind_message)});
-    debug.print("msg_salt: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.msg_salt.?)});
 
     const blind_sig = try sk.blindSign(blinded_msg.blind_message);
     debug.print("blind_sig: {s}\n", .{fmt.fmtSliceHexLower(&blind_sig)});
 
-    const sig = try pk.finalize(blind_sig, blinded_msg.secret, msg, blinded_msg.msg_salt);
+    const sig = try pk.finalize(blind_sig, blinded_msg.secret, msg);
     debug.print("sig: {s}\n", .{fmt.fmtSliceHexLower(&sig)});
 
     var spki_buf: [BRsa.PublicKey.max_spki_length]u8 = undefined;
