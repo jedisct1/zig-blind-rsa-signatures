@@ -38,7 +38,7 @@ This implementation requires OpenSSL or BoringSSL.
     // [CLIENT]: create a random message and blind it for the server whose public key is `pk`.
     // The client must store the message and the secret.
     const msg = "msg";
-    var blinding_result = try pk.blind(msg);
+    var blinding_result = try pk.blind(msg, true);
 
     // [SERVER]: compute a signature for a blind message, to be sent to the client.
     // The client secret should not be sent to the server.
@@ -51,10 +51,11 @@ This implementation requires OpenSSL or BoringSSL.
     // server cannot link it to a previous(blinded message, blind signature) pair.
     // Note that the finalization function also verifies that the new signature
     // is correct for the server public key.
-    const sig = try pk.finalize(blind_sig, blinding_result.secret, msg);
+    const sig = try pk.finalize(blind_sig, blinding_result.secret,
+                                blinding_result.msg_randomizer, msg);
 
     // [SERVER]: a non-blind signature can be verified using the server's public key.
-    try pk.verify(sig, msg);
+    try pk.verify(sig, blinding_result.msg_randomizer, msg);
 ```
 
 Deterministic padding is also supported with the `BlindRsaDeterministic` type:
