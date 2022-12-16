@@ -125,7 +125,7 @@ pub fn BlindRsaCustom(
         /// A (non-blind) signature
         pub const Signature = [modulus_bytes]u8;
 
-        /// A message randomizer
+        /// A message randomizer ("noise" added before the message to be signed)
         pub const MessageRandomizer = [32]u8;
 
         /// The result of a blinding operation
