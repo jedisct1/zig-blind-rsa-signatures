@@ -1,13 +1,17 @@
 const std = @import("std");
-const Builder = std.build.Builder;
 
-pub fn build(b: *Builder) void {
-    const mode = b.standardReleaseOptions();
-    const lib = b.addStaticLibrary("rsa-blind-signatures", "src/main.zig");
-    lib.setBuildMode(mode);
+pub fn build(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
+    const target = b.standardTargetOptions(.{});
+    const lib = b.addStaticLibrary(.{
+        .name = "rsa-blind-signatures",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .optimize = optimize,
+        .target = target,
+    });
     lib.install();
 
-    var main_tests = b.addTest("src/main.zig");
+    var main_tests = b.addTest(.{ .root_source_file = .{ .path = "src/main.zig" } });
     main_tests.addSystemIncludePath("/usr/local/opt/openssl/include");
     main_tests.addSystemIncludePath("/usr/local/openssl/include");
     main_tests.addSystemIncludePath("/opt/homebrew/opt/openssl@1.1/include");
@@ -15,7 +19,6 @@ pub fn build(b: *Builder) void {
     main_tests.addLibraryPath("/usr/local/openssl/lib");
     main_tests.addLibraryPath("/opt/homebrew/opt/openssl@1.1/lib");
     main_tests.linkSystemLibrary("crypto");
-    main_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
