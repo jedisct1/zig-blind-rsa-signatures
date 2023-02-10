@@ -305,6 +305,13 @@ pub fn BlindRsaCustom(
                 const m: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&padded, padded.len, m));
 
+                // Check that gcd(m, n) == 1
+                const gcd: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
+                try sslTry(ssl.BN_gcd(gcd, m, rsaParam(.n, pk.evp_pkey), bn_ctx));
+                if (ssl.BN_is_one(gcd) == 0) {
+                    return error.InvalidInput;
+                }
+
                 // Compute a blinding factor and its inverse
                 const secret_inv: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 const secret: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
