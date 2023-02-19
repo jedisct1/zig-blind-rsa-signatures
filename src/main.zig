@@ -498,7 +498,7 @@ pub fn BlindRsaCustom(
                 const n = rsaParam(.n, sk.evp_pkey);
                 var n_s: [blind_message.len]u8 = undefined;
                 try sslTry(bn2binPadded(&n_s, n_s.len, n));
-                for (blind_message) |a, i| {
+                for (blind_message, 0..) |a, i| {
                     const b = n_s[i];
                     if (a < b) break;
                     if (a > b or i + 1 == blind_message.len) return error.NonCanonicalBlindMessage;
