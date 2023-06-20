@@ -58,7 +58,7 @@ fn bn2binPadded(out: [*c]u8, out_len: usize, in: *const BIGNUM) c_int {
 }
 
 fn rsaRef(evp_pkey: *const EVP_PKEY) *RSA {
-    return ssl.EVP_PKEY_get0_RSA(@intToPtr(*EVP_PKEY, @ptrToInt(evp_pkey))).?;
+    return ssl.EVP_PKEY_get0_RSA(@ptrFromInt(*EVP_PKEY, @intFromPtr(evp_pkey))).?;
 }
 
 fn rsaBits(evp_pkey: *const EVP_PKEY) c_int {

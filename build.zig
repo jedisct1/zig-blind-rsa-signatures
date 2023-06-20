@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .target = target,
     });
-    lib.install();
+    b.installArtifact(lib);
 
     var main_tests = b.addTest(.{ .root_source_file = .{ .path = "src/main.zig" } });
     main_tests.addSystemIncludePath("/usr/local/opt/openssl/include");
