@@ -4,6 +4,8 @@ Author-blinded RSASSA-PSS RSAE signatures.
 
 This is an implementation of the [RSA Blind Signatures](https://www.rfc-editor.org/rfc/rfc9474.html) RFC.
 
+Also includes a preliminary implementation of the [Partially Blind RSA Signatures](https://chris-wood.github.io/draft-amjad-cfrg-partially-blind-rsa/draft-amjad-cfrg-partially-blind-rsa.html) draft.
+
 ## Protocol overview
 
 A client asks a server to sign a message. The server receives the message, and returns the signature.
