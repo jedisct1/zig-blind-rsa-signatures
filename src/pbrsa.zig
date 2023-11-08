@@ -187,7 +187,7 @@ pub fn PartiallyBlindRsaCustom(
                 var hkdf_input = hkdf_input_raw[0..hkdf_input_len];
                 @memcpy(hkdf_input[0.."key".len], "key");
                 @memcpy(hkdf_input["key".len..][0..metadata.len], metadata);
-                hkdf_input[("key".len + metadata.len)] = 0;
+                hkdf_input["key".len + metadata.len] = 0;
                 var hkdf_salt: [modulus_bytes]u8 = undefined;
                 try sslTry(bn2binPadded(&hkdf_salt, hkdf_salt.len, rsaParam(.n, pk.evp_pkey)));
 
@@ -673,7 +673,8 @@ pub fn PartiallyBlindRsaCustom(
             /// Derive a per-metadata key pair from a master key pair.
             pub fn deriveForMetadata(kp: KeyPair, metadata: []const u8) !KeyPair {
                 const pk = try kp.pk.derivePublicKeyForMetadata(metadata);
-                const e2 = try sslConstPtr(BIGNUM, rsaParam(.e, kp.sk.evp_pkey));
+
+                const e = try sslConstPtr(BIGNUM, rsaParam(.e, pk.evp_pkey));
                 const p = try sslConstPtr(BIGNUM, rsaParam(.p, kp.sk.evp_pkey));
                 const q = try sslConstPtr(BIGNUM, rsaParam(.q, kp.sk.evp_pkey));
 
@@ -684,19 +685,12 @@ pub fn PartiallyBlindRsaCustom(
                     ssl.BN_CTX_free(bn_ctx);
                 }
 
-                const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-                defer ssl.BN_free(pm1);
-                const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-                defer ssl.BN_free(qm1);
-                try sslTry(ssl.BN_sub(pm1, p, ssl.BN_value_one()));
-                try sslTry(ssl.BN_sub(qm1, q, ssl.BN_value_one()));
-
                 const phi = try getPhi(bn_ctx, p, q);
                 defer ssl.BN_free(phi);
 
                 const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(d2);
-                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
+                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e, phi, bn_ctx));
 
                 const sk_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(kp.sk.evp_pkey));
                 try sslTry(ssl.RSA_set0_key(rsaRef(sk_pkey), null, null, d2));
@@ -794,4 +788,64 @@ test "Partially blind RSA signatures - Key derivation" {
     var buf2: [1000]u8 = undefined;
     const pk2_bytes = try dpk.serialize(&buf2);
     try testing.expectEqualSlices(u8, pk_bytes, pk2_bytes);
+}
+
+test "Test vector" {
+    const tv = .{
+        .p = "dcd90af1be463632c0d5ea555256a20605af3db667475e190e3af12a34a3324c46a3094062c59fb4b249e0ee6afba8bee14e0276d126c99f4784b23009bf6168ff628ac1486e5ae8e23ce4d362889de4df63109cbd90ef93db5ae64372bfe1c55f832766f21e94ea3322eb2182f10a891546536ba907ad74b8d72469bea396f3",
+        .q = "f8ba5c89bd068f57234a3cf54a1c89d5b4cd0194f2633ca7c60b91a795a56fa8c8686c0e37b1c4498b851e3420d08bea29f71d195cfbd3671c6ddc49cf4c1db5b478231ea9d91377ffa98fe95685fca20ba4623212b2f2def4da5b281ed0100b651f6db32112e4017d831c0da668768afa7141d45bbc279f1e0f8735d74395b3",
+        .n = "d6930820f71fe517bf3259d14d40209b02a5c0d3d61991c731dd7da39f8d69821552e2318d6c9ad897e603887a476ea3162c1205da9ac96f02edf31df049bd55f142134c17d4382a0e78e275345f165fbe8e49cdca6cf5c726c599dd39e09e75e0f330a33121e73976e4facba9cfa001c28b7c96f8134f9981db6750b43a41710f51da4240fe03106c12acb1e7bb53d75ec7256da3fddd0718b89c365410fce61bc7c99b115fb4c3c318081fa7e1b65a37774e8e50c96e8ce2b2cc6b3b367982366a2bf9924c4bafdb3ff5e722258ab705c76d43e5f1f121b984814e98ea2b2b8725cd9bc905c0bc3d75c2a8db70a7153213c39ae371b2b5dc1dafcb19d6fae9",
+        .e = "010001",
+        .d = "4e21356983722aa1adedb084a483401c1127b781aac89eab103e1cfc52215494981d18dd8028566d9d499469c25476358de23821c78a6ae43005e26b394e3051b5ca206aa9968d68cae23b5affd9cbb4cb16d64ac7754b3cdba241b72ad6ddfc000facdb0f0dd03abd4efcfee1730748fcc47b7621182ef8af2eeb7c985349f62ce96ab373d2689baeaea0e28ea7d45f2d605451920ca4ea1f0c08b0f1f6711eaa4b7cca66d58a6b916f9985480f90aca97210685ac7b12d2ec3e30a1c7b97b65a18d38a93189258aa346bf2bc572cd7e7359605c20221b8909d599ed9d38164c9c4abf396f897b9993c1e805e574d704649985b600fa0ced8e5427071d7049d",
+    };
+
+    const metadata = "metadata";
+
+    const BRsa = PartiallyBlindRsa(2048);
+
+    var n: ?*BIGNUM = null;
+    var e: ?*BIGNUM = null;
+    var d: ?*BIGNUM = null;
+    var p: ?*BIGNUM = null;
+    var q: ?*BIGNUM = null;
+    try sslNegTry(ssl.BN_hex2bn(&n, tv.n));
+    try sslNegTry(ssl.BN_hex2bn(&e, tv.e));
+    try sslNegTry(ssl.BN_hex2bn(&d, tv.d));
+    try sslNegTry(ssl.BN_hex2bn(&p, tv.p));
+    try sslNegTry(ssl.BN_hex2bn(&q, tv.q));
+    const sk_ = try sslAlloc(RSA, ssl.RSA_new());
+    try sslTry(ssl.RSA_set0_key(sk_, n, e, d));
+    const pk_ = try sslAlloc(RSA, ssl.RSA_new());
+    try sslTry(ssl.RSA_set0_key(pk_, n, e, null));
+    try sslTry(ssl.RSA_set0_factors(sk_, p, q));
+
+    var sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    _ = ssl.EVP_PKEY_assign(sk_evp_pkey, ssl.EVP_PKEY_RSA, sk_);
+    const sk = BRsa.SecretKey{ .evp_pkey = sk_evp_pkey };
+    var pk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
+    const pk = BRsa.PublicKey{
+        .evp_pkey = pk_evp_pkey,
+        .mont_ctx = try BRsa.newMontDomain(ssl.RSA_get0_n(pk_).?),
+    };
+
+    const dpk = try pk.derivePublicKeyForMetadata(metadata);
+
+    var buf: [2048 / 8]u8 = undefined;
+    var r = try sslConstPtr(BIGNUM, rsaParam(.n, dpk.evp_pkey));
+    _ = bn2binPadded(&buf, buf.len, r);
+
+    const kp = PartiallyBlindRsa(2048).KeyPair{
+        .pk = pk,
+        .sk = sk,
+    };
+    const dkp = try kp.deriveForMetadata(metadata);
+    r = try sslConstPtr(BIGNUM, rsaParam(.d, dkp.sk.evp_pkey));
+    _ = bn2binPadded(&buf, buf.len, r);
+
+    const expected_d2_hex = "29c25948b214276527434f7d289385098ada0d30866e40eaf56cbe1ffb3ed5881c2df0bd42ea9925d7715fc98767d48e3ee4dae03335e4903fe984c863e1a2f27990fa6999308d7b6515fe0f7da7bb6a979b63f483618b0e2bce2c67daf8dfc099c7f6a0a1292118f35b3133358a200b67f9a0a3c17ceb678095da143d2264327fff5a9fcf280e83421ba398e62965b48628307794e326d57b9f98ce098d88d3e40360e7d5c567fbdce22413e279a7814bc6bab4a5bd35f4bcf3295d68f6d47505fd47aee64f7797f1061342b826db508ba9a62d948c6ee8ec05756267f4a97576d97b773037af601bea110defbd89fb4111c7257b500ad9d1212c849fd355d1";
+    var expected_d2: [expected_d2_hex.len / 2]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&expected_d2, expected_d2_hex);
+
+    try testing.expectEqualSlices(u8, &buf, &expected_d2);
 }
