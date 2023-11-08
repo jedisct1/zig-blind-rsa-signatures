@@ -747,7 +747,7 @@ pub fn PartiallyBlindRsaCustom(
 
 const testing = std.testing;
 
-test "Partially RSA blind signatures" {
+test "Partially blind RSA signatures" {
     // Generate a new RSA-2048 key
     const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
     defer kp.deinit();
@@ -778,7 +778,7 @@ test "Partially RSA blind signatures" {
     try pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
 }
 
-test "Partially RSA blind signatures - Key derivation" {
+test "Partially blind RSA signatures - Key derivation" {
     const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
     defer kp.deinit();
 
