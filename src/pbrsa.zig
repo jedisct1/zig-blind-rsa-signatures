@@ -102,6 +102,22 @@ fn isSafePrime(p: *const BIGNUM) !bool {
     return ret == 1;
 }
 
+fn getPhi(bn_ctx: *BN_CTX, p: *const BIGNUM, q: *const BIGNUM) !*BIGNUM {
+    const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+    defer ssl.BN_free(pm1);
+    const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+    defer ssl.BN_free(qm1);
+    try sslTry(ssl.BN_sub(pm1, p, ssl.BN_value_one()));
+    try sslTry(ssl.BN_sub(qm1, q, ssl.BN_value_one()));
+
+    const phi: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+    errdefer ssl.BN_free(phi);
+
+    try sslTry(ssl.BN_mul(phi, pm1, qm1, bn_ctx));
+
+    return phi;
+}
+
 /// Standard blind RSA signatures with a `modulus_bits` modulus size.
 /// Recommended for most applications.
 pub fn PartiallyBlindRsa(comptime modulus_bits: u16) type {
@@ -540,8 +556,8 @@ pub fn PartiallyBlindRsaCustom(
                 if (rsaBits(evp_pkey.?) != modulus_bits) {
                     return error.UnexpectedModulus;
                 }
-                const p = try sslAlloc(BIGNUM, ssl.RSA_get0_p(rsaRef(evp_pkey)));
-                const q = try sslAlloc(BIGNUM, ssl.RSA_get0_q(rsaRef(evp_pkey)));
+                const p = try sslAlloc(BIGNUM, rsaParam(.p, rsaRef(evp_pkey)));
+                const q = try sslAlloc(BIGNUM, rsaParam(.q, rsaRef(evp_pkey)));
                 if (!try isSafePrime(p) or !try isSafePrime(q)) {
                     return error.UnsafePrime;
                 }
@@ -625,14 +641,6 @@ pub fn PartiallyBlindRsaCustom(
                     ));
                     if (ssl.BN_cmp(p, q) != 0) break;
                 }
-                const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-                defer ssl.BN_free(pm1);
-                const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-                defer ssl.BN_free(qm1);
-                try sslTry(ssl.BN_sub(pm1, p, ssl.BN_value_one()));
-                try sslTry(ssl.BN_sub(qm1, q, ssl.BN_value_one()));
-                const phi: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-                defer ssl.BN_free(phi);
 
                 const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
                 ssl.BN_CTX_start(bn_ctx);
@@ -641,7 +649,9 @@ pub fn PartiallyBlindRsaCustom(
                     ssl.BN_CTX_free(bn_ctx);
                 }
 
-                try sslTry(ssl.BN_mul(phi, pm1, qm1, bn_ctx));
+                const phi = try getPhi(bn_ctx, p, q);
+                defer ssl.BN_free(phi);
+
                 const n: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(n);
                 try sslTry(ssl.BN_mul(n, p, q, bn_ctx));
@@ -663,6 +673,41 @@ pub fn PartiallyBlindRsaCustom(
                 try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk));
                 const sk_ = SecretKey{ .evp_pkey = evp_pkey };
                 return KeyPair{ .sk = sk_, .pk = try sk_.publicKey() };
+            }
+
+            /// Derive a per-metadata key pair from a master key pair.
+            pub fn deriveForMetadata(kp: KeyPair, metadata: []const u8) !KeyPair {
+                const pk = try kp.pk.derivePublicKeyForMetadata(metadata);
+                const e2 = try sslConstPtr(BIGNUM, rsaParam(.e, kp.sk.evp_pkey));
+                const p = try sslConstPtr(BIGNUM, rsaParam(.p, kp.sk.evp_pkey));
+                const q = try sslConstPtr(BIGNUM, rsaParam(.q, kp.sk.evp_pkey));
+
+                const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
+                ssl.BN_CTX_start(bn_ctx);
+                defer {
+                    ssl.BN_CTX_end(bn_ctx);
+                    ssl.BN_CTX_free(bn_ctx);
+                }
+
+                const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(pm1);
+                const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(qm1);
+                try sslTry(ssl.BN_sub(pm1, p, ssl.BN_value_one()));
+                try sslTry(ssl.BN_sub(qm1, q, ssl.BN_value_one()));
+
+                const phi = try getPhi(bn_ctx, p, q);
+                defer ssl.BN_free(phi);
+
+                const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
+                errdefer ssl.BN_free(d2);
+                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
+
+                const sk_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(kp.sk.evp_pkey));
+                try sslTry(ssl.RSA_set0_key(rsaRef(sk_pkey), null, null, d2));
+                const sk = SecretKey{ .evp_pkey = sk_pkey };
+
+                return KeyPair{ .sk = sk, .pk = pk };
             }
         };
 
@@ -739,35 +784,19 @@ test "Partially RSA blind signatures" {
 }
 
 test "Partially RSA blind signatures - Key derivation" {
-    // Generate a new RSA-2048 key
     const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
     defer kp.deinit();
 
     const pk = kp.pk;
-    const sk = kp.sk;
-
     const metadata = "metadata";
 
     const dpk = try pk.derivePublicKeyForMetadata(metadata);
-    _ = dpk;
 
-    // Blind a message with the server public key,
-    // return the blinding factor and the blind message
-    const msg = "msg";
-    const blinding_result = try pk.blind(msg, false, metadata);
+    const dkp = try kp.deriveForMetadata(metadata);
 
-    // Compute a blind signature
-    const blind_sig = try sk.blindSign(blinding_result.blind_message);
-
-    // Compute the signature for the original message
-    const sig = try pk.finalize(
-        blind_sig,
-        blinding_result.secret,
-        blinding_result.msg_randomizer,
-        msg,
-        metadata,
-    );
-
-    // Verify the non-blind signature
-    try pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
+    var buf: [1000]u8 = undefined;
+    const pk_bytes = try dkp.pk.serialize(&buf);
+    var buf2: [1000]u8 = undefined;
+    const pk2_bytes = try dpk.serialize(&buf2);
+    try testing.expectEqualSlices(u8, pk_bytes, pk2_bytes);
 }
