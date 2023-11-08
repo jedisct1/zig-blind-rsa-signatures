@@ -212,13 +212,7 @@ pub fn PartiallyBlindRsaCustom(
                 exp_bytes[0] &= 0x3f;
                 exp_bytes[lambda_len - 1] |= 0x01;
 
-                const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
-                ssl.BN_CTX_start(bn_ctx);
-                defer {
-                    ssl.BN_CTX_end(bn_ctx);
-                    ssl.BN_CTX_free(bn_ctx);
-                }
-                const e2: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
+                const e2: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&exp_bytes, lambda_len, e2));
 
                 const pk2 = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(pk.evp_pkey));
