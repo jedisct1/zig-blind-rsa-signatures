@@ -16,6 +16,7 @@ const ssl = @cImport({
     @cInclude("openssl/crypto.h");
     @cInclude("openssl/rand.h");
     @cInclude("openssl/x509.h");
+    @cInclude("openssl/kdf.h");
 });
 
 const BN_CTX = ssl.BN_CTX;
@@ -26,6 +27,7 @@ const RSA = ssl.RSA;
 const BIGNUM = ssl.BIGNUM;
 const EVP_PKEY = ssl.EVP_PKEY;
 const X509_ALGOR = ssl.X509_ALGOR;
+const PKEY_CTX = ssl.EVP_PKEY_CTX;
 
 // Helpers for all the different ways OpenSSL has to return an error.
 
@@ -158,6 +160,58 @@ pub fn PartiallyBlindRsaCustom(
             pub fn deinit(pk: PublicKey) void {
                 ssl.EVP_PKEY_free(pk.evp_pkey);
                 ssl.BN_MONT_CTX_free(pk.mont_ctx);
+            }
+
+            /// Derive a per-metadata public key from a master public key
+            pub fn derivePublicKeyForMetadata(pk: PublicKey, metadata: []const u8) !PublicKey {
+                const hkdf_input_len = "key".len + metadata.len + 1;
+                const hkdf_input_raw: [*c]u8 = @ptrCast(try sslAlloc(anyopaque, ssl.OPENSSL_malloc(hkdf_input_len)));
+                defer ssl.OPENSSL_free(hkdf_input_raw);
+                var hkdf_input = hkdf_input_raw[0..hkdf_input_len];
+                @memcpy(hkdf_input[0.."key".len], "key");
+                @memcpy(hkdf_input["key".len..][0..metadata.len], metadata);
+                hkdf_input[("key".len + metadata.len)] = 0;
+                var hkdf_salt: [modulus_bytes]u8 = undefined;
+                try sslTry(bn2binPadded(&hkdf_salt, hkdf_salt.len, rsaParam(.n, pk.evp_pkey)));
+
+                comptime assert(modulus_bytes % 2 == 0);
+                const lambda_len = modulus_bytes / 2;
+                const hkdf_len = lambda_len + 16;
+
+                const info = "PBRSA";
+                const pkey_ctx: *PKEY_CTX = try sslAlloc(PKEY_CTX, ssl.EVP_PKEY_CTX_new_id(ssl.EVP_PKEY_HKDF, null));
+                defer ssl.EVP_PKEY_CTX_free(pkey_ctx);
+                try sslNegTry(ssl.EVP_PKEY_derive_init(pkey_ctx));
+                try sslNegTry(ssl.EVP_PKEY_CTX_set_hkdf_md(pkey_ctx, Hash.evp_fn().?));
+                try sslNegTry(ssl.EVP_PKEY_CTX_set1_hkdf_salt(pkey_ctx, &hkdf_salt, hkdf_salt.len));
+                try sslNegTry(ssl.EVP_PKEY_CTX_set1_hkdf_key(pkey_ctx, hkdf_input.ptr, @intCast(hkdf_input.len)));
+                try sslNegTry(ssl.EVP_PKEY_CTX_add1_hkdf_info(pkey_ctx, info, info.len));
+
+                var exp_bytes: [hkdf_len]u8 = undefined;
+
+                var exp_bytes_len: usize = @intCast(exp_bytes.len);
+                try sslNegTry(ssl.EVP_PKEY_derive(pkey_ctx, &exp_bytes, &exp_bytes_len));
+
+                exp_bytes[0] &= 0x3f;
+                exp_bytes[lambda_len - 1] |= 0x01;
+
+                const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
+                ssl.BN_CTX_start(bn_ctx);
+                defer {
+                    ssl.BN_CTX_end(bn_ctx);
+                    ssl.BN_CTX_free(bn_ctx);
+                }
+                const e2: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
+                try sslNTry(BIGNUM, ssl.BN_bin2bn(&exp_bytes, lambda_len, e2));
+
+                const pk2 = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(pk.evp_pkey));
+                try sslTry(ssl.RSA_set0_key(rsaRef(pk2), null, e2, null));
+
+                const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
+                errdefer ssl.BN_MONT_CTX_free(mont_ctx);
+                try sslNTry(BN_MONT_CTX, ssl.BN_MONT_CTX_copy(mont_ctx, pk.mont_ctx));
+
+                return PublicKey{ .evp_pkey = pk2, .mont_ctx = mont_ctx };
             }
 
             /// Import a serialized RSA public key
@@ -662,6 +716,40 @@ test "Partially RSA blind signatures" {
     const sk = kp.sk;
 
     const metadata = "metadata";
+
+    // Blind a message with the server public key,
+    // return the blinding factor and the blind message
+    const msg = "msg";
+    const blinding_result = try pk.blind(msg, false, metadata);
+
+    // Compute a blind signature
+    const blind_sig = try sk.blindSign(blinding_result.blind_message);
+
+    // Compute the signature for the original message
+    const sig = try pk.finalize(
+        blind_sig,
+        blinding_result.secret,
+        blinding_result.msg_randomizer,
+        msg,
+        metadata,
+    );
+
+    // Verify the non-blind signature
+    try pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
+}
+
+test "Partially RSA blind signatures - Key derivation" {
+    // Generate a new RSA-2048 key
+    const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
+    defer kp.deinit();
+
+    const pk = kp.pk;
+    const sk = kp.sk;
+
+    const metadata = "metadata";
+
+    const dpk = try pk.derivePublicKeyForMetadata(metadata);
+    _ = dpk;
 
     // Blind a message with the server public key,
     // return the blinding factor and the blind message
