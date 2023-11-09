@@ -2,7 +2,7 @@ const std = @import("std");
 
 const CryptoLib = enum { openssl, boringssl };
 
-const crypto_lib: CryptoLib = .boringssl;
+const crypto_lib: CryptoLib = .openssl;
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});

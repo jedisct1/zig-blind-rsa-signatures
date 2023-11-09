@@ -85,8 +85,7 @@ fn rsaParam(param: enum { n, e, p, q, d }, evp_pkey: *const EVP_PKEY) *const BIG
 }
 
 fn rsaDup(evp_pkey: *const EVP_PKEY) !*EVP_PKEY {
-    var evp_pkey_: ?*EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
-    try sslTry(ssl.EVP_PKEY_copy_parameters(evp_pkey_, evp_pkey));
+    var evp_pkey_: ?*EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(@constCast(evp_pkey)));
     return evp_pkey_.?;
 }
 
@@ -225,16 +224,24 @@ pub fn PartiallyBlindRsaCustom(
                 exp_bytes[lambda_len - 1] |= 0x01;
 
                 const e2: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                errdefer ssl.BN_free(e2);
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&exp_bytes, lambda_len, e2));
 
-                const pk2 = try rsaDup(pk.evp_pkey);
-                try sslTry(ssl.RSA_set0_key(rsaRef(pk2), null, e2, null));
+                const pk2 = try sslAlloc(RSA, ssl.RSA_new());
+                errdefer ssl.RSA_free(pk2);
+                const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
+                try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, pk2));
+
+                const pk2_n = try sslAlloc(BIGNUM, ssl.BN_dup(rsaParam(.n, pk.evp_pkey)));
+                errdefer ssl.BN_free(pk2_n);
+                try sslTry(ssl.RSA_set0_key(pk2, pk2_n, e2, null));
 
                 const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
                 errdefer ssl.BN_MONT_CTX_free(mont_ctx);
                 try sslNTry(BN_MONT_CTX, ssl.BN_MONT_CTX_copy(mont_ctx, pk.mont_ctx));
 
-                return PublicKey{ .evp_pkey = pk2, .mont_ctx = mont_ctx };
+                return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
             }
 
             /// Import a serialized RSA public key
