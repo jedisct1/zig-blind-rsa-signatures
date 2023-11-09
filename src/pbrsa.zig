@@ -698,6 +698,13 @@ pub fn PartiallyBlindRsaCustom(
 
                 return KeyPair{ .sk = sk, .pk = pk };
             }
+
+            /// Derive a per-metadata secret key from a master key pair.
+            pub fn deriveSecretKeyForMetadata(kp: KeyPair, metadata: []const u8) !SecretKey {
+                const dkp = try kp.deriveForMetadata(metadata);
+                dkp.pk.deinit();
+                return dkp.sk;
+            }
         };
 
         fn saltLength() usize {
