@@ -19,6 +19,8 @@ const ssl = @cImport({
     @cInclude("openssl/x509.h");
 });
 
+const IS_BORINGSSL = @hasDecl(ssl, "BORINGSSL_API_VERSION");
+
 const BN_CTX = ssl.BN_CTX;
 const BN_MONT_CTX = ssl.BN_MONT_CTX;
 const EVP_MD = ssl.EVP_MD;
@@ -63,7 +65,7 @@ fn rsaRef(evp_pkey: *const EVP_PKEY) *RSA {
 }
 
 fn rsaBits(evp_pkey: *const EVP_PKEY) c_int {
-    return ssl.RSA_bits(rsaRef(evp_pkey));
+    return @intCast(ssl.RSA_bits(rsaRef(evp_pkey)));
 }
 
 fn rsaSize(evp_pkey: *const EVP_PKEY) usize {
@@ -78,6 +80,12 @@ fn rsaParam(param: enum { n, e, p, q, d }, evp_pkey: *const EVP_PKEY) *const BIG
         .q => return ssl.RSA_get0_q(rsaRef(evp_pkey)).?,
         .d => return ssl.RSA_get0_d(rsaRef(evp_pkey)).?,
     }
+}
+
+fn rsaDup(evp_pkey: *const EVP_PKEY) !*EVP_PKEY {
+    var evp_pkey_: ?*EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    try sslTry(ssl.EVP_PKEY_copy_parameters(evp_pkey_, evp_pkey));
+    return evp_pkey_.?;
 }
 
 const HashParams = struct {
@@ -412,7 +420,7 @@ pub fn BlindRsaCustom(
                 ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
                 var algor_mgf1_s_ptr: ?*ssl.ASN1_STRING = try sslAlloc(ssl.ASN1_STRING, ssl.ASN1_STRING_new());
                 defer ssl.ASN1_STRING_free(algor_mgf1_s_ptr);
-                var alg_rptr: *const ssl.ASN1_ITEM = ssl.X509_ALGOR_it().?;
+                var alg_rptr: *const ssl.ASN1_ITEM = if (IS_BORINGSSL) &ssl.X509_ALGOR_it else ssl.X509_ALGOR_it().?;
                 try sslNTry(ssl.ASN1_STRING, ssl.ASN1_item_pack(algor_mgf1, alg_rptr, &algor_mgf1_s_ptr));
                 const algor_mgf1_s_len = ssl.ASN1_STRING_length(algor_mgf1_s_ptr);
                 const algor_mgf1_s = ssl.ASN1_STRING_get0_data(algor_mgf1_s_ptr)[0..@as(usize, @intCast(algor_mgf1_s_len))];
