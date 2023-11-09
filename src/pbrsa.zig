@@ -84,11 +84,6 @@ fn rsaParam(param: enum { n, e, p, q, d }, evp_pkey: *const EVP_PKEY) *const BIG
     }
 }
 
-fn rsaDup(evp_pkey: *const EVP_PKEY) !*EVP_PKEY {
-    var evp_pkey_: ?*EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(@constCast(evp_pkey)));
-    return evp_pkey_.?;
-}
-
 const HashParams = struct {
     const sha256 = .{ .evp_fn = ssl.EVP_sha256, .salt_length = 32 };
     const sha384 = .{ .evp_fn = ssl.EVP_sha384, .salt_length = 48 };
@@ -293,7 +288,7 @@ pub fn PartiallyBlindRsaCustom(
                 defer ssl.X509_PUBKEY_free(x509_pkey);
 
                 const evp_pkey: *EVP_PKEY = try sslAlloc(ssl.EVP_PKEY, ssl.X509_PUBKEY_get(x509_pkey));
-
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
                 if (rsaBits(evp_pkey) != modulus_bits) {
                     return error.UnexpectedModulus;
                 }
@@ -578,7 +573,9 @@ pub fn PartiallyBlindRsaCustom(
                     return error.UnexpectedModulus;
                 }
                 const p = try sslAlloc(BIGNUM, rsaParam(.p, rsaRef(evp_pkey)));
+                defer ssl.BN_free(p);
                 const q = try sslAlloc(BIGNUM, rsaParam(.q, rsaRef(evp_pkey)));
+                defer ssl.BN_free(q);
                 if (!try isSafePrime(p) or !try isSafePrime(q)) {
                     return error.UnsafePrime;
                 }
@@ -691,6 +688,7 @@ pub fn PartiallyBlindRsaCustom(
                 try sslTry(ssl.RSA_set0_key(sk, n, e, d));
                 try sslTry(ssl.RSA_set0_factors(sk, p, q));
                 var evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
                 try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk));
                 const sk_ = SecretKey{ .evp_pkey = evp_pkey };
                 return KeyPair{ .sk = sk_, .pk = try sk_.publicKey() };
@@ -721,9 +719,17 @@ pub fn PartiallyBlindRsaCustom(
                 const e2_ = try sslAlloc(BIGNUM, ssl.BN_dup(e2));
                 errdefer ssl.BN_free(e2_);
 
-                const sk_pkey: *EVP_PKEY = try rsaDup(kp.sk.evp_pkey);
-                try sslTry(ssl.RSA_set0_key(rsaRef(sk_pkey), null, @constCast(e2), d2));
-                const sk = SecretKey{ .evp_pkey = sk_pkey };
+                const sk2 = try sslAlloc(RSA, ssl.RSA_new());
+                errdefer ssl.RSA_free(sk2);
+                const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
+                try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk2));
+
+                const sk2_n = try sslAlloc(BIGNUM, ssl.BN_dup(rsaParam(.n, kp.sk.evp_pkey)));
+                errdefer ssl.BN_free(sk2_n);
+
+                try sslTry(ssl.RSA_set0_key(rsaRef(evp_pkey), sk2_n, @constCast(e2), d2));
+                const sk = SecretKey{ .evp_pkey = evp_pkey };
 
                 return KeyPair{ .sk = sk, .pk = pk };
             }
@@ -744,6 +750,7 @@ pub fn PartiallyBlindRsaCustom(
             const len = @as(usize, @intCast(ssl.EVP_MD_size(evp)));
             debug.assert(h.len >= len);
             var hash_ctx = try sslAlloc(EVP_MD_CTX, ssl.EVP_MD_CTX_new());
+            defer ssl.EVP_MD_CTX_free(hash_ctx);
             try sslTry(ssl.EVP_DigestInit(hash_ctx, evp));
             if (metadata) |ad| {
                 try sslTry(ssl.EVP_DigestUpdate(hash_ctx, "msg", 3));

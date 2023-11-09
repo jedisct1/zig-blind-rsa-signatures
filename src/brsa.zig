@@ -197,7 +197,7 @@ pub fn BlindRsaCustom(
                 defer ssl.X509_PUBKEY_free(x509_pkey);
 
                 const evp_pkey: *EVP_PKEY = try sslAlloc(ssl.EVP_PKEY, ssl.X509_PUBKEY_get(x509_pkey));
-
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
                 if (rsaBits(evp_pkey) != modulus_bits) {
                     return error.UnexpectedModulus;
                 }
@@ -551,6 +551,7 @@ pub fn BlindRsaCustom(
             const len = @as(usize, @intCast(ssl.EVP_MD_size(evp)));
             debug.assert(h.len >= len);
             var hash_ctx = try sslAlloc(EVP_MD_CTX, ssl.EVP_MD_CTX_new());
+            defer ssl.EVP_MD_CTX_free(hash_ctx);
             try sslTry(ssl.EVP_DigestInit(hash_ctx, evp));
             if (prefix) |p| {
                 try sslTry(ssl.EVP_DigestUpdate(hash_ctx, &p, p.len));
