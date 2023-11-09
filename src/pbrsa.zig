@@ -88,6 +88,10 @@ const HashParams = struct {
     const sha512 = .{ .evp_fn = ssl.EVP_sha512, .salt_length = 64 };
 };
 
+//
+
+const allow_nonstandard_exponent = true;
+
 fn isSafePrime(p: *const BIGNUM) !bool {
     const q = try sslAlloc(BIGNUM, ssl.BN_dup(p));
     defer ssl.BN_free(q);
@@ -247,8 +251,15 @@ pub fn PartiallyBlindRsaCustom(
                 const ef4: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 defer ssl.BN_free(ef4);
                 try sslTry(ssl.BN_set_word(ef4, ssl.RSA_F4));
-                if (ssl.BN_cmp(e3, rsaParam(.e, evp_pkey)) != 0 and ssl.BN_cmp(ef4, rsaParam(.e, evp_pkey)) != 0) {
-                    return error.UnexpectedExponent;
+                if (allow_nonstandard_exponent) {
+                    const e_bits = ssl.BN_num_bits(rsaParam(.e, evp_pkey));
+                    if (e_bits > modulus_bits / 2) {
+                        return error.UnexpectedExponent;
+                    }
+                } else {
+                    if (ssl.BN_cmp(e3, rsaParam(.e, evp_pkey)) != 0 and ssl.BN_cmp(ef4, rsaParam(.e, evp_pkey)) != 0) {
+                        return error.UnexpectedExponent;
+                    }
                 }
                 const mont_ctx = try newMontDomain(rsaParam(.n, evp_pkey));
                 return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
@@ -671,10 +682,10 @@ pub fn PartiallyBlindRsaCustom(
             }
 
             /// Derive a per-metadata key pair from a master key pair.
-            pub fn deriveForMetadata(kp: KeyPair, metadata: []const u8) !KeyPair {
+            pub fn deriveKeyPairForMetadata(kp: KeyPair, metadata: []const u8) !KeyPair {
                 const pk = try kp.pk.derivePublicKeyForMetadata(metadata);
 
-                const e = try sslConstPtr(BIGNUM, rsaParam(.e, pk.evp_pkey));
+                const e2 = try sslConstPtr(BIGNUM, rsaParam(.e, pk.evp_pkey));
                 const p = try sslConstPtr(BIGNUM, rsaParam(.p, kp.sk.evp_pkey));
                 const q = try sslConstPtr(BIGNUM, rsaParam(.q, kp.sk.evp_pkey));
 
@@ -690,10 +701,13 @@ pub fn PartiallyBlindRsaCustom(
 
                 const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(d2);
-                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e, phi, bn_ctx));
+                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
+
+                const e2_ = try sslAlloc(BIGNUM, ssl.BN_dup(e2));
+                errdefer ssl.BN_free(e2_);
 
                 const sk_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_dup(kp.sk.evp_pkey));
-                try sslTry(ssl.RSA_set0_key(rsaRef(sk_pkey), null, null, d2));
+                try sslTry(ssl.RSA_set0_key(rsaRef(sk_pkey), null, @constCast(e2), d2));
                 const sk = SecretKey{ .evp_pkey = sk_pkey };
 
                 return KeyPair{ .sk = sk, .pk = pk };
@@ -701,7 +715,7 @@ pub fn PartiallyBlindRsaCustom(
 
             /// Derive a per-metadata secret key from a master key pair.
             pub fn deriveSecretKeyForMetadata(kp: KeyPair, metadata: []const u8) !SecretKey {
-                const dkp = try kp.deriveForMetadata(metadata);
+                const dkp = try kp.deriveKeyPairForMetadata(metadata);
                 dkp.pk.deinit();
                 return dkp.sk;
             }
@@ -753,21 +767,23 @@ test "Partially blind RSA signatures" {
     const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
     defer kp.deinit();
 
-    const pk = kp.pk;
-    const sk = kp.sk;
-
     const metadata = "metadata";
+
+    // Derive a key pair for a specific metadata
+    const derived_kp = try kp.deriveKeyPairForMetadata(metadata);
+    const derived_pk = derived_kp.pk;
+    const derived_sk = derived_kp.sk;
 
     // Blind a message with the server public key,
     // return the blinding factor and the blind message
     const msg = "msg";
-    const blinding_result = try pk.blind(msg, false, metadata);
+    const blinding_result = try derived_pk.blind(msg, false, metadata);
 
     // Compute a blind signature
-    const blind_sig = try sk.blindSign(blinding_result.blind_message);
+    const blind_sig = try derived_sk.blindSign(blinding_result.blind_message);
 
     // Compute the signature for the original message
-    const sig = try pk.finalize(
+    const sig = try derived_pk.finalize(
         blind_sig,
         blinding_result.secret,
         blinding_result.msg_randomizer,
@@ -776,25 +792,7 @@ test "Partially blind RSA signatures" {
     );
 
     // Verify the non-blind signature
-    try pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
-}
-
-test "Partially blind RSA signatures - Key derivation" {
-    const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
-    defer kp.deinit();
-
-    const pk = kp.pk;
-    const metadata = "metadata";
-
-    const dpk = try pk.derivePublicKeyForMetadata(metadata);
-
-    const dkp = try kp.deriveForMetadata(metadata);
-
-    var buf: [1000]u8 = undefined;
-    const pk_bytes = try dkp.pk.serialize(&buf);
-    var buf2: [1000]u8 = undefined;
-    const pk2_bytes = try dpk.serialize(&buf2);
-    try testing.expectEqualSlices(u8, pk_bytes, pk2_bytes);
+    try derived_pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
 }
 
 test "Test vector" {
@@ -846,7 +844,7 @@ test "Test vector" {
         .pk = pk,
         .sk = sk,
     };
-    const dkp = try kp.deriveForMetadata(metadata);
+    const dkp = try kp.deriveKeyPairForMetadata(metadata);
     r = try sslConstPtr(BIGNUM, rsaParam(.d, dkp.sk.evp_pkey));
     _ = bn2binPadded(&buf, buf.len, r);
 
