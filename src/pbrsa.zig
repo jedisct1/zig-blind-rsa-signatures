@@ -74,13 +74,16 @@ fn rsaSize(evp_pkey: *const EVP_PKEY) usize {
     return @as(usize, @intCast(ssl.RSA_size(rsaRef(evp_pkey))));
 }
 
-fn rsaParam(param: enum { n, e, p, q, d }, evp_pkey: *const EVP_PKEY) *const BIGNUM {
+fn rsaParam(param: enum { n, e, p, q, d, dmp1, dmq1, iqmp }, evp_pkey: *const EVP_PKEY) *const BIGNUM {
     switch (param) {
         .n => return ssl.RSA_get0_n(rsaRef(evp_pkey)).?,
         .e => return ssl.RSA_get0_e(rsaRef(evp_pkey)).?,
         .p => return ssl.RSA_get0_p(rsaRef(evp_pkey)).?,
         .q => return ssl.RSA_get0_q(rsaRef(evp_pkey)).?,
         .d => return ssl.RSA_get0_d(rsaRef(evp_pkey)).?,
+        .dmp1 => return ssl.RSA_get0_dmp1(rsaRef(evp_pkey)).?,
+        .dmq1 => return ssl.RSA_get0_dmq1(rsaRef(evp_pkey)).?,
+        .iqmp => return ssl.RSA_get0_iqmp(rsaRef(evp_pkey)).?,
     }
 }
 
@@ -97,7 +100,7 @@ const allow_nonstandard_exponent = true;
 fn isSafePrime(p: *const BIGNUM) !bool {
     const q = try sslAlloc(BIGNUM, ssl.BN_dup(p));
     defer ssl.BN_free(q);
-    try sslTry(ssl.BN_sub(q, q, ssl.BN_value_one()));
+    try sslTry(ssl.BN_usub(q, q, ssl.BN_value_one()));
     try sslTry(ssl.BN_rshift1(q, q));
     const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
     ssl.BN_CTX_start(bn_ctx);
@@ -114,8 +117,8 @@ fn getPhi(bn_ctx: *BN_CTX, p: *const BIGNUM, q: *const BIGNUM) !*BIGNUM {
     defer ssl.BN_free(pm1);
     const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
     defer ssl.BN_free(qm1);
-    try sslTry(ssl.BN_sub(pm1, p, ssl.BN_value_one()));
-    try sslTry(ssl.BN_sub(qm1, q, ssl.BN_value_one()));
+    try sslTry(ssl.BN_usub(pm1, p, ssl.BN_value_one()));
+    try sslTry(ssl.BN_usub(qm1, q, ssl.BN_value_one()));
 
     const phi: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
     errdefer ssl.BN_free(phi);
@@ -123,6 +126,44 @@ fn getPhi(bn_ctx: *BN_CTX, p: *const BIGNUM, q: *const BIGNUM) !*BIGNUM {
     try sslTry(ssl.BN_mul(phi, pm1, qm1, bn_ctx));
 
     return phi;
+}
+
+fn newMontDomain(n: *const BIGNUM) !*BN_MONT_CTX {
+    const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
+    errdefer ssl.BN_MONT_CTX_free(mont_ctx);
+    const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
+    ssl.BN_CTX_start(bn_ctx);
+    defer {
+        ssl.BN_CTX_end(bn_ctx);
+        ssl.BN_CTX_free(bn_ctx);
+    }
+    try sslTry(ssl.BN_MONT_CTX_set(mont_ctx, n, bn_ctx));
+    return mont_ctx;
+}
+
+fn modInverseSecretPrime(bn_ctx: *BN_CTX, a: *const BIGNUM, p: *const BIGNUM) !*BIGNUM {
+    const pmont_ctx = try newMontDomain(p);
+    defer ssl.BN_MONT_CTX_free(pmont_ctx);
+
+    const pm2 = try sslAlloc(BIGNUM, ssl.BN_new());
+    defer ssl.BN_free(pm2);
+
+    try sslNTry(BIGNUM, ssl.BN_copy(pm2, p));
+    try sslTry(ssl.BN_sub_word(pm2, 2));
+
+    const res = try sslAlloc(BIGNUM, ssl.BN_new());
+    errdefer ssl.BN_free(res);
+
+    // non-ct reduction
+    var a_reduced = try sslAlloc(BIGNUM, ssl.BN_new());
+    defer ssl.BN_free(a_reduced);
+    try sslNTry(BIGNUM, ssl.BN_copy(a_reduced, a));
+    while (ssl.BN_ucmp(a_reduced, p) >= 0) {
+        try sslTry(ssl.BN_usub(a_reduced, a_reduced, p));
+    }
+    try sslTry(ssl.BN_mod_exp_mont_consttime(res, a_reduced, pm2, p, bn_ctx, pmont_ctx));
+
+    return res;
 }
 
 /// Standard blind RSA signatures with a `modulus_bits` modulus size.
@@ -185,6 +226,22 @@ pub fn PartiallyBlindRsaCustom(
                 ssl.BN_MONT_CTX_free(pk.mont_ctx);
             }
 
+            // BoringSSL rejects large exponents by default
+            fn allowLargeExponent(pk: *PublicKey) !void {
+                if (IS_BORINGSSL and allow_nonstandard_exponent) {
+                    const evp_pkey = pk.evp_pkey;
+                    const evp_pkey2 = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                    errdefer ssl.EVP_PKEY_free(evp_pkey2);
+                    const rsa_large_e = try sslAlloc(RSA, ssl.RSA_new_public_key_large_e(
+                        rsaParam(.n, evp_pkey),
+                        rsaParam(.e, evp_pkey),
+                    ));
+                    try sslTry(ssl.EVP_PKEY_assign(evp_pkey2, ssl.EVP_PKEY_RSA, rsa_large_e));
+                    pk.evp_pkey = evp_pkey2;
+                    ssl.EVP_PKEY_free(evp_pkey);
+                }
+            }
+
             /// Derive a per-metadata public key from a master public key
             pub fn derivePublicKeyForMetadata(pk: PublicKey, metadata: []const u8) !PublicKey {
                 const hkdf_input_len = "key".len + metadata.len + 1;
@@ -224,19 +281,23 @@ pub fn PartiallyBlindRsaCustom(
 
                 const pk2 = try sslAlloc(RSA, ssl.RSA_new());
                 errdefer ssl.RSA_free(pk2);
-                const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
-                errdefer ssl.EVP_PKEY_free(evp_pkey);
-                try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, pk2));
 
                 const pk2_n = try sslAlloc(BIGNUM, ssl.BN_dup(rsaParam(.n, pk.evp_pkey)));
                 errdefer ssl.BN_free(pk2_n);
                 try sslTry(ssl.RSA_set0_key(pk2, pk2_n, e2, null));
 
+                const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                errdefer ssl.EVP_PKEY_free(evp_pkey);
+                try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, pk2));
+
                 const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
                 errdefer ssl.BN_MONT_CTX_free(mont_ctx);
                 try sslNTry(BN_MONT_CTX, ssl.BN_MONT_CTX_copy(mont_ctx, pk.mont_ctx));
 
-                return PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
+                var ret = PublicKey{ .evp_pkey = evp_pkey, .mont_ctx = mont_ctx };
+                try ret.allowLargeExponent();
+
+                return ret;
             }
 
             /// Import a serialized RSA public key
@@ -563,6 +624,62 @@ pub fn PartiallyBlindRsaCustom(
                 ssl.EVP_PKEY_free(sk.evp_pkey);
             }
 
+            fn computeCrtParams(sk: *SecretKey, bn_ctx: *BN_CTX) !void {
+                const evp_pkey = sk.evp_pkey;
+                var rsa = rsaRef(evp_pkey);
+
+                const d = rsaParam(.d, evp_pkey);
+                const p = rsaParam(.p, evp_pkey);
+                const q = rsaParam(.q, evp_pkey);
+
+                const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(pm1);
+                const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                defer ssl.BN_free(qm1);
+                try sslTry(ssl.BN_usub(pm1, p, ssl.BN_value_one()));
+                try sslTry(ssl.BN_usub(qm1, q, ssl.BN_value_one()));
+
+                const dmp1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                errdefer ssl.BN_free(dmp1);
+                const dmq1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                errdefer ssl.BN_free(dmq1);
+
+                // d mod (p-1)
+                try sslTry(ssl.BN_div(null, dmp1, d, pm1, bn_ctx));
+                // d mod (q-1)
+                try sslTry(ssl.BN_div(null, dmq1, d, qm1, bn_ctx));
+                // (q-p)^-1
+                const iqmp = try modInverseSecretPrime(bn_ctx, q, p);
+                errdefer ssl.BN_free(iqmp);
+
+                try sslTry(ssl.RSA_set0_crt_params(rsa, dmp1, dmq1, iqmp));
+            }
+
+            // BoringSSL rejects large exponents by default
+            fn allowLargeExponent(sk: *SecretKey) !void {
+                if (IS_BORINGSSL and allow_nonstandard_exponent) {
+                    const evp_pkey = sk.evp_pkey;
+                    const evp_pkey2 = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                    errdefer ssl.EVP_PKEY_free(evp_pkey2);
+
+                    const rsa_large_e_n = ssl.RSA_new_private_key_large_e(
+                        rsaParam(.n, evp_pkey),
+                        rsaParam(.e, evp_pkey),
+                        rsaParam(.d, evp_pkey),
+                        rsaParam(.p, evp_pkey),
+                        rsaParam(.q, evp_pkey),
+                        rsaParam(.dmp1, evp_pkey),
+                        rsaParam(.dmq1, evp_pkey),
+                        rsaParam(.iqmp, evp_pkey),
+                    );
+                    const rsa_large_e = try sslAlloc(RSA, rsa_large_e_n);
+                    try sslTry(ssl.EVP_PKEY_assign(evp_pkey2, ssl.EVP_PKEY_RSA, rsa_large_e));
+
+                    sk.evp_pkey = evp_pkey2;
+                    ssl.EVP_PKEY_free(evp_pkey);
+                }
+            }
+
             /// Import an RSA secret key
             pub fn import(der: []const u8) !SecretKey {
                 var evp_pkey: ?*EVP_PKEY = null;
@@ -618,7 +735,13 @@ pub fn PartiallyBlindRsaCustom(
                     if (a > b or i + 1 == blind_message.len) return error.NonCanonicalBlindMessage;
                 }
                 var blind_sig: BlindSignature = undefined;
-                try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, rsaRef(sk.evp_pkey), ssl.RSA_NO_PADDING));
+                try sslNegTry(ssl.RSA_private_encrypt(
+                    blind_sig.len,
+                    &blind_message,
+                    &blind_sig,
+                    rsaRef(sk.evp_pkey),
+                    ssl.RSA_NO_PADDING,
+                ));
                 return blind_sig;
             }
         };
@@ -680,7 +803,7 @@ pub fn PartiallyBlindRsaCustom(
 
                 const d: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(d);
-                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d, e, phi, null));
+                try sslNTry(BIGNUM, ssl.BN_mod_inverse(d, e, phi, bn_ctx));
 
                 const sk = try sslAlloc(RSA, ssl.RSA_new());
                 errdefer ssl.RSA_free(sk);
@@ -728,8 +851,12 @@ pub fn PartiallyBlindRsaCustom(
                 const sk2_n = try sslAlloc(BIGNUM, ssl.BN_dup(rsaParam(.n, kp.sk.evp_pkey)));
                 errdefer ssl.BN_free(sk2_n);
 
+                try sslTry(ssl.RSA_set0_factors(rsaRef(evp_pkey), @constCast(p), @constCast(q)));
                 try sslTry(ssl.RSA_set0_key(rsaRef(evp_pkey), sk2_n, @constCast(e2), d2));
-                const sk = SecretKey{ .evp_pkey = evp_pkey };
+
+                var sk = SecretKey{ .evp_pkey = evp_pkey };
+                try sk.computeCrtParams(bn_ctx);
+                try sk.allowLargeExponent();
 
                 return KeyPair{ .sk = sk, .pk = pk };
             }
@@ -765,19 +892,6 @@ pub fn PartiallyBlindRsaCustom(
             try sslTry(ssl.EVP_DigestUpdate(hash_ctx, msg.ptr, msg.len));
             try sslTry(ssl.EVP_DigestFinal_ex(hash_ctx, h, null));
             return h[0..len];
-        }
-
-        fn newMontDomain(n: *const BIGNUM) !*BN_MONT_CTX {
-            const mont_ctx = try sslAlloc(BN_MONT_CTX, ssl.BN_MONT_CTX_new());
-            errdefer ssl.BN_MONT_CTX_free(mont_ctx);
-            const bn_ctx: *BN_CTX = try sslAlloc(BN_CTX, ssl.BN_CTX_new());
-            ssl.BN_CTX_start(bn_ctx);
-            defer {
-                ssl.BN_CTX_end(bn_ctx);
-                ssl.BN_CTX_free(bn_ctx);
-            }
-            try sslTry(ssl.BN_MONT_CTX_set(mont_ctx, n, bn_ctx));
-            return mont_ctx;
         }
     };
 }
@@ -853,7 +967,7 @@ test "Test vector" {
     _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
     const pk = BRsa.PublicKey{
         .evp_pkey = pk_evp_pkey,
-        .mont_ctx = try BRsa.newMontDomain(ssl.RSA_get0_n(pk_).?),
+        .mont_ctx = try newMontDomain(ssl.RSA_get0_n(pk_).?),
     };
 
     const dpk = try pk.derivePublicKeyForMetadata(metadata);
