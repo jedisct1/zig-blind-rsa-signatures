@@ -155,7 +155,7 @@ fn modInverseSecretPrime(bn_ctx: *BN_CTX, a: *const BIGNUM, p: *const BIGNUM) !*
     errdefer ssl.BN_free(res);
 
     // non-ct reduction
-    var a_reduced = try sslAlloc(BIGNUM, ssl.BN_new());
+    const a_reduced = try sslAlloc(BIGNUM, ssl.BN_new());
     defer ssl.BN_free(a_reduced);
     try sslNTry(BIGNUM, ssl.BN_copy(a_reduced, a));
     while (ssl.BN_ucmp(a_reduced, p) >= 0) {
@@ -588,7 +588,7 @@ pub fn PartiallyBlindRsaCustom(
                 var raw_ptr: [*c]u8 = null;
                 const raw_len = ssl.i2d_PublicKey(pk.evp_pkey, &raw_ptr);
                 try sslNTry(u8, raw_ptr);
-                var raw = raw_ptr[0..@as(usize, @intCast(raw_len))];
+                const raw = raw_ptr[0..@as(usize, @intCast(raw_len))];
                 defer ssl.OPENSSL_free(raw_ptr);
                 const container_len = spki_tpl.len - 4 + raw.len;
                 const out_len = spki_tpl.len + raw.len;
@@ -602,12 +602,12 @@ pub fn PartiallyBlindRsaCustom(
                 out[66] = @as(u8, @intCast(salt_length));
                 mem.writeInt(u16, out[69..71], @as(u16, @intCast(1 + raw.len)), .big);
 
-                var algor_mgf1 = try sslAlloc(X509_ALGOR, ssl.X509_ALGOR_new());
+                const algor_mgf1 = try sslAlloc(X509_ALGOR, ssl.X509_ALGOR_new());
                 defer ssl.X509_ALGOR_free(algor_mgf1);
                 ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
                 var algor_mgf1_s_ptr: ?*ssl.ASN1_STRING = try sslAlloc(ssl.ASN1_STRING, ssl.ASN1_STRING_new());
                 defer ssl.ASN1_STRING_free(algor_mgf1_s_ptr);
-                var alg_rptr: *const ssl.ASN1_ITEM = if (IS_BORINGSSL) &ssl.X509_ALGOR_it else ssl.X509_ALGOR_it().?;
+                const alg_rptr: *const ssl.ASN1_ITEM = if (IS_BORINGSSL) &ssl.X509_ALGOR_it else ssl.X509_ALGOR_it().?;
                 try sslNTry(ssl.ASN1_STRING, ssl.ASN1_item_pack(algor_mgf1, alg_rptr, &algor_mgf1_s_ptr));
                 const algor_mgf1_s_len = ssl.ASN1_STRING_length(algor_mgf1_s_ptr);
                 const algor_mgf1_s = ssl.ASN1_STRING_get0_data(algor_mgf1_s_ptr)[0..@as(usize, @intCast(algor_mgf1_s_len))];
@@ -782,7 +782,7 @@ pub fn PartiallyBlindRsaCustom(
 
                 try sslTry(ssl.RSA_set0_key(sk, n, e, d));
                 try sslTry(ssl.RSA_set0_factors(sk, p, q));
-                var evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                const evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
                 errdefer ssl.EVP_PKEY_free(evp_pkey);
                 try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk));
                 const sk_ = SecretKey{ .evp_pkey = evp_pkey };
@@ -869,7 +869,7 @@ pub fn PartiallyBlindRsaCustom(
         fn hash(evp: *const EVP_MD, h: *[ssl.EVP_MAX_MD_SIZE]u8, prefix: ?MessageRandomizer, msg: []const u8, metadata: ?[]const u8) ![]u8 {
             const len = @as(usize, @intCast(ssl.EVP_MD_size(evp)));
             debug.assert(h.len >= len);
-            var hash_ctx = try sslAlloc(EVP_MD_CTX, ssl.EVP_MD_CTX_new());
+            const hash_ctx = try sslAlloc(EVP_MD_CTX, ssl.EVP_MD_CTX_new());
             defer ssl.EVP_MD_CTX_free(hash_ctx);
             try sslTry(ssl.EVP_DigestInit(hash_ctx, evp));
             if (metadata) |ad| {
@@ -953,10 +953,10 @@ test "Test vector" {
     try sslTry(ssl.RSA_set0_key(pk_, n, e, null));
     try sslTry(ssl.RSA_set0_factors(sk_, p, q));
 
-    var sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    const sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
     _ = ssl.EVP_PKEY_assign(sk_evp_pkey, ssl.EVP_PKEY_RSA, sk_);
     const sk = BRsa.SecretKey{ .evp_pkey = sk_evp_pkey };
-    var pk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    const pk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
     _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
     const pk = BRsa.PublicKey{
         .evp_pkey = pk_evp_pkey,
