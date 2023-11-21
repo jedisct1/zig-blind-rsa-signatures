@@ -823,6 +823,7 @@ pub fn PartiallyBlindRsaCustom(
                     const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
                     defer ssl.BN_free(d2);
                     try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
+
                     const crt_params = try CrtParams.compute(bn_ctx, p, q, d2);
                     defer crt_params.deinit();
                     const sk2 = try sslAlloc(
@@ -855,6 +856,8 @@ pub fn PartiallyBlindRsaCustom(
 
                     const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
                     errdefer ssl.BN_free(d2);
+                    try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
+
                     const e2_ = try sslAlloc(BIGNUM, ssl.BN_dup(e2));
                     errdefer ssl.BN_free(e2_);
                     const p_ = try sslAlloc(BIGNUM, ssl.BN_dup(p));
