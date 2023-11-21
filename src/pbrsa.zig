@@ -970,12 +970,18 @@ test "Test vector" {
     const sk_ = try sslAlloc(RSA, ssl.RSA_new());
     try sslTry(ssl.RSA_set0_key(sk_, n, e, d));
     const pk_ = try sslAlloc(RSA, ssl.RSA_new());
-    try sslTry(ssl.RSA_set0_key(pk_, n, e, null));
+
+    const n_ = try sslAlloc(BIGNUM, ssl.BN_dup(n));
+    const e_ = try sslAlloc(BIGNUM, ssl.BN_dup(e));
+
+    try sslTry(ssl.RSA_set0_key(pk_, n_, e_, null));
     try sslTry(ssl.RSA_set0_factors(sk_, p, q));
 
     const sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
     _ = ssl.EVP_PKEY_assign(sk_evp_pkey, ssl.EVP_PKEY_RSA, sk_);
+
     const sk = BRsa.SecretKey{ .evp_pkey = sk_evp_pkey };
+
     const pk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
     _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
     const pk = BRsa.PublicKey{
@@ -984,6 +990,7 @@ test "Test vector" {
     };
 
     const dpk = try pk.derivePublicKeyForMetadata(metadata);
+    defer dpk.deinit();
 
     var buf: [2048 / 8]u8 = undefined;
     var r = try sslConstPtr(BIGNUM, rsaParam(.n, dpk.evp_pkey));
@@ -993,7 +1000,10 @@ test "Test vector" {
         .pk = pk,
         .sk = sk,
     };
+    defer kp.deinit();
+
     const dkp = try kp.deriveKeyPairForMetadata(metadata);
+    defer dkp.deinit();
     r = try sslConstPtr(BIGNUM, rsaParam(.d, dkp.sk.evp_pkey));
     _ = bn2binPadded(&buf, buf.len, r);
 
