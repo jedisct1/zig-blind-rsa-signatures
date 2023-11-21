@@ -531,7 +531,7 @@ pub fn PartiallyBlindRsaCustom(
                 // Blind the message
                 const x: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 const blind_m: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
-                try sslTry(ssl.BN_mod_exp_mont(x, secret_inv, rsaParam(.e, pk.evp_pkey), rsaParam(.n, pk.evp_pkey), bn_ctx, pk.mont_ctx));
+                try sslTry(ssl.BN_mod_exp_mont_consttime(x, secret_inv, rsaParam(.e, pk.evp_pkey), rsaParam(.n, pk.evp_pkey), bn_ctx, pk.mont_ctx));
                 ssl.BN_clear(secret_inv);
                 try sslTry(ssl.BN_mod_mul(blind_m, m, x, rsaParam(.n, pk.evp_pkey), bn_ctx));
 
