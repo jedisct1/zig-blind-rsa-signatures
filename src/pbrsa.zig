@@ -118,9 +118,7 @@ fn getPhi(bn_ctx: *BN_CTX, p: *const BIGNUM, q: *const BIGNUM) !*BIGNUM {
     try sslTry(ssl.BN_usub(pm1, p, ssl.BN_value_one()));
     try sslTry(ssl.BN_usub(qm1, q, ssl.BN_value_one()));
 
-    const phi: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-    errdefer ssl.BN_free(phi);
-
+    const phi: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
     try sslTry(ssl.BN_mul(phi, pm1, qm1, bn_ctx));
 
     return phi;
@@ -770,7 +768,6 @@ pub fn PartiallyBlindRsaCustom(
                 }
 
                 const phi = try getPhi(bn_ctx, p, q);
-                defer ssl.BN_free(phi);
 
                 const n: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(n);
@@ -813,7 +810,6 @@ pub fn PartiallyBlindRsaCustom(
                 }
 
                 const phi = try getPhi(bn_ctx, p, q);
-                defer ssl.BN_free(phi);
 
                 var sk: SecretKey = undefined;
                 if (is_boringssl and allow_nonstandard_exponent) {
