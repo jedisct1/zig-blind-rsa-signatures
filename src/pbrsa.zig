@@ -173,10 +173,8 @@ const CrtParams = struct {
         q: *const BIGNUM,
         d: *const BIGNUM,
     ) !CrtParams {
-        const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-        defer ssl.BN_free(pm1);
-        const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
-        defer ssl.BN_free(qm1);
+        const pm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
+        const qm1: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
         try sslTry(ssl.BN_usub(pm1, p, ssl.BN_value_one()));
         try sslTry(ssl.BN_usub(qm1, q, ssl.BN_value_one()));
 
@@ -276,7 +274,7 @@ pub fn PartiallyBlindRsaCustom(
                 var hkdf_input = hkdf_input_raw[0..hkdf_input_len];
                 @memcpy(hkdf_input[0.."key".len], "key");
                 @memcpy(hkdf_input["key".len..][0..metadata.len], metadata);
-                hkdf_input["key".len + metadata.len] = 0;
+                hkdf_input[hkdf_input_len - 1] = 0;
                 var hkdf_salt: [modulus_bytes]u8 = undefined;
                 try sslTry(bn2binPadded(&hkdf_salt, hkdf_salt.len, rsaParam(.n, pk.evp_pkey)));
 
@@ -293,7 +291,7 @@ pub fn PartiallyBlindRsaCustom(
 
                 var exp_bytes: [hkdf_len]u8 = undefined;
 
-                var exp_bytes_len: usize = @intCast(exp_bytes.len);
+                var exp_bytes_len = exp_bytes.len;
                 try sslNegTry(ssl.EVP_PKEY_derive(pkey_ctx, &exp_bytes, &exp_bytes_len));
 
                 exp_bytes[0] &= 0x3f;
@@ -796,6 +794,7 @@ pub fn PartiallyBlindRsaCustom(
             /// Derive a per-metadata key pair from a master key pair.
             pub fn deriveKeyPairForMetadata(kp: KeyPair, metadata: []const u8) !KeyPair {
                 const pk = try kp.pk.derivePublicKeyForMetadata(metadata);
+                errdefer pk.deinit();
 
                 const e2 = try sslConstPtr(BIGNUM, rsaParam(.e, pk.evp_pkey));
                 const p = try sslConstPtr(BIGNUM, rsaParam(.p, kp.sk.evp_pkey));
