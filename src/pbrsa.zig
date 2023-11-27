@@ -141,22 +141,19 @@ fn modInverseSecretPrime(bn_ctx: *BN_CTX, a: *const BIGNUM, p: *const BIGNUM) !*
     const pmont_ctx = try newMontDomain(p);
     defer ssl.BN_MONT_CTX_free(pmont_ctx);
 
-    const pm2 = try sslAlloc(BIGNUM, ssl.BN_new());
-    defer ssl.BN_free(pm2);
+    const pm2 = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
 
     try sslNTry(BIGNUM, ssl.BN_copy(pm2, p));
     try sslTry(ssl.BN_sub_word(pm2, 2));
 
-    const res = try sslAlloc(BIGNUM, ssl.BN_new());
-    errdefer ssl.BN_free(res);
-
     // non-ct reduction
-    const a_reduced = try sslAlloc(BIGNUM, ssl.BN_new());
-    defer ssl.BN_free(a_reduced);
+    const a_reduced = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
     try sslNTry(BIGNUM, ssl.BN_copy(a_reduced, a));
     while (ssl.BN_ucmp(a_reduced, p) >= 0) {
         try sslTry(ssl.BN_usub(a_reduced, a_reduced, p));
     }
+    const res = try sslAlloc(BIGNUM, ssl.BN_new());
+    errdefer ssl.BN_free(res);
     try sslTry(ssl.BN_mod_exp_mont_consttime(res, a_reduced, pm2, p, bn_ctx, pmont_ctx));
 
     return res;
