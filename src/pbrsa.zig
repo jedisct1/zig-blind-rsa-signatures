@@ -138,8 +138,8 @@ fn newMontDomain(n: *const BIGNUM) !*BN_MONT_CTX {
 }
 
 fn modInverseSecretPrime(bn_ctx: *BN_CTX, a: *const BIGNUM, p: *const BIGNUM) !*BIGNUM {
-    const pmont_ctx = try newMontDomain(p);
-    defer ssl.BN_MONT_CTX_free(pmont_ctx);
+    const mont_ctx = try newMontDomain(p);
+    defer ssl.BN_MONT_CTX_free(mont_ctx);
 
     const pm2 = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
 
@@ -154,7 +154,7 @@ fn modInverseSecretPrime(bn_ctx: *BN_CTX, a: *const BIGNUM, p: *const BIGNUM) !*
     }
     const res = try sslAlloc(BIGNUM, ssl.BN_new());
     errdefer ssl.BN_free(res);
-    try sslTry(ssl.BN_mod_exp_mont_consttime(res, a_reduced, pm2, p, bn_ctx, pmont_ctx));
+    try sslTry(ssl.BN_mod_exp_mont_consttime(res, a_reduced, pm2, p, bn_ctx, mont_ctx));
 
     return res;
 }
@@ -352,7 +352,7 @@ pub fn PartiallyBlindRsaCustom(
                 try sslTry(ssl.BN_set_word(ef4, ssl.RSA_F4));
                 if (allow_nonstandard_exponent) {
                     const e_bits = ssl.BN_num_bits(rsaParam(.e, evp_pkey));
-                    if (e_bits > modulus_bits / 2) {
+                    if (e_bits < 2 or e_bits > modulus_bits / 2) {
                         return error.UnexpectedExponent;
                     }
                 } else {
@@ -809,8 +809,7 @@ pub fn PartiallyBlindRsaCustom(
 
                 var sk: SecretKey = undefined;
                 if (is_boringssl and allow_nonstandard_exponent) {
-                    const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
-                    defer ssl.BN_free(d2);
+                    const d2 = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                     try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
 
                     const crt_params = try CrtParams.compute(bn_ctx, p, q, d2);
