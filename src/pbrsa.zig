@@ -718,7 +718,9 @@ pub fn PartiallyBlindRsaCustom(
             }
         };
 
-        /// An RSA key pair
+        /// A key pair for partially-blind RSA signatures.
+        /// While these keys can be used for regular RSA and PBRSA, it doesn't work the other way around.
+        /// PBRSA have additional requirements.
         pub const KeyPair = struct {
             pk: PublicKey,
             sk: SecretKey,
