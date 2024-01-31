@@ -537,6 +537,8 @@ pub fn BlindRsaCustom(
                 try sslTry(ssl.BN_set_word(e, ssl.RSA_F4));
                 try sslTry(ssl.RSA_generate_key_ex(sk, modulus_bits, e, null));
                 const evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+                defer ssl.EVP_PKEY_free(evp_pkey);
+                _ = ssl.EVP_PKEY_up_ref(evp_pkey);
                 _ = ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk);
                 const sk_ = SecretKey{ .evp_pkey = evp_pkey };
                 return KeyPair{ .sk = sk_, .pk = try sk_.publicKey() };
@@ -689,9 +691,13 @@ test "Test vector" {
     _ = try fmt.hexToBytes(&blinded_message, tv.blinded_message);
 
     const sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    defer ssl.EVP_PKEY_free(sk_evp_pkey);
+    _ = ssl.EVP_PKEY_up_ref(sk_evp_pkey);
     _ = ssl.EVP_PKEY_assign(sk_evp_pkey, ssl.EVP_PKEY_RSA, sk_);
     const sk = BRsa.SecretKey{ .evp_pkey = sk_evp_pkey };
     const pk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
+    defer ssl.EVP_PKEY_free(pk_evp_pkey);
+    _ = ssl.EVP_PKEY_up_ref(pk_evp_pkey);
     _ = ssl.EVP_PKEY_assign(pk_evp_pkey, ssl.EVP_PKEY_RSA, pk_);
     const pk = BRsa.PublicKey{
         .evp_pkey = pk_evp_pkey,
