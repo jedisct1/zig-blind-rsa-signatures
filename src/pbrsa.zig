@@ -305,16 +305,18 @@ pub fn PartiallyBlindRsaCustom(
                     pk2 = try sslAlloc(RSA, ssl.RSA_new_public_key_large_e(n, e2));
                     errdefer ssl.RSA_free(pk2);
                 } else {
-                    const e2: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                    var e2: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                     errdefer ssl.BN_free(e2);
                     try sslNTry(BIGNUM, ssl.BN_bin2bn(&exp_bytes, lambda_len, e2));
 
                     pk2 = try sslAlloc(RSA, ssl.RSA_new());
                     errdefer ssl.RSA_free(pk2);
 
-                    const pk2_n = try sslAlloc(BIGNUM, ssl.BN_dup(n));
+                    var pk2_n: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(n));
                     errdefer ssl.BN_free(pk2_n);
                     try sslTry(ssl.RSA_set0_key(pk2, pk2_n, e2, null));
+                    pk2_n = null;
+                    e2 = null;
                 }
 
                 const evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
@@ -732,9 +734,9 @@ pub fn PartiallyBlindRsaCustom(
 
             /// Generate a new key pair
             pub fn generate() !KeyPair {
-                const p: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                var p: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(p);
-                const q: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                var q: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(q);
                 const safe = 1;
                 while (true) {
@@ -764,17 +766,17 @@ pub fn PartiallyBlindRsaCustom(
                     ssl.BN_CTX_free(bn_ctx);
                 }
 
-                const phi = try getPhi(bn_ctx, p, q);
+                const phi = try getPhi(bn_ctx, p.?, q.?);
 
-                const n: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                var n: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(n);
                 try sslTry(ssl.BN_mul(n, p, q, bn_ctx));
 
-                const e: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                var e: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(e);
                 try sslTry(ssl.BN_set_word(e, ssl.RSA_F4));
 
-                const d: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
+                var d: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                 errdefer ssl.BN_free(d);
                 try sslNTry(BIGNUM, ssl.BN_mod_inverse(d, e, phi, bn_ctx));
 
@@ -782,7 +784,12 @@ pub fn PartiallyBlindRsaCustom(
                 errdefer ssl.RSA_free(sk);
 
                 try sslTry(ssl.RSA_set0_key(sk, n, e, d));
+                n = null;
+                e = null;
+                d = null;
                 try sslTry(ssl.RSA_set0_factors(sk, p, q));
+                p = null;
+                q = null;
                 const evp_pkey: *EVP_PKEY = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
                 errdefer ssl.EVP_PKEY_free(evp_pkey);
                 try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk));
@@ -841,22 +848,27 @@ pub fn PartiallyBlindRsaCustom(
                     errdefer ssl.EVP_PKEY_free(evp_pkey);
                     try sslTry(ssl.EVP_PKEY_assign(evp_pkey, ssl.EVP_PKEY_RSA, sk2));
 
-                    const sk2_n = try sslAlloc(BIGNUM, ssl.BN_dup(rsaParam(.n, kp.sk.evp_pkey)));
+                    var sk2_n: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(rsaParam(.n, kp.sk.evp_pkey)));
                     errdefer ssl.BN_free(sk2_n);
 
-                    const d2 = try sslAlloc(BIGNUM, ssl.BN_new());
+                    var d2: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_new());
                     errdefer ssl.BN_free(d2);
                     try sslNTry(BIGNUM, ssl.BN_mod_inverse(d2, e2, phi, bn_ctx));
 
-                    const e2_ = try sslAlloc(BIGNUM, ssl.BN_dup(e2));
+                    var e2_: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(e2));
                     errdefer ssl.BN_free(e2_);
-                    const p_ = try sslAlloc(BIGNUM, ssl.BN_dup(p));
+                    var p_: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(p));
                     errdefer ssl.BN_free(p_);
-                    const q_ = try sslAlloc(BIGNUM, ssl.BN_dup(q));
+                    var q_: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(q));
                     errdefer ssl.BN_free(q_);
 
                     try sslTry(ssl.RSA_set0_factors(rsaRef(evp_pkey), p_, q_));
+                    p_ = null;
+                    q_ = null;
                     try sslTry(ssl.RSA_set0_key(rsaRef(evp_pkey), sk2_n, e2_, d2));
+                    sk2_n = null;
+                    e2_ = null;
+                    d2 = null;
 
                     sk = SecretKey{ .evp_pkey = evp_pkey };
                 }
@@ -961,15 +973,25 @@ test "Test vector" {
     try sslNegTry(ssl.BN_hex2bn(&d, tv.d));
     try sslNegTry(ssl.BN_hex2bn(&p, tv.p));
     try sslNegTry(ssl.BN_hex2bn(&q, tv.q));
-    const sk_ = try sslAlloc(RSA, ssl.RSA_new());
+    const sk_: ?*RSA = try sslAlloc(RSA, ssl.RSA_new());
+
+    var n_: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(n));
+    errdefer ssl.BN_free(n_);
+    var e_: ?*BIGNUM = try sslAlloc(BIGNUM, ssl.BN_dup(e));
+    errdefer ssl.BN_free(e_);
+
     try sslTry(ssl.RSA_set0_key(sk_, n, e, d));
+    n = null;
+    e = null;
+    d = null;
     const pk_ = try sslAlloc(RSA, ssl.RSA_new());
 
-    const n_ = try sslAlloc(BIGNUM, ssl.BN_dup(n));
-    const e_ = try sslAlloc(BIGNUM, ssl.BN_dup(e));
-
     try sslTry(ssl.RSA_set0_key(pk_, n_, e_, null));
+    n_ = null;
+    e_ = null;
     try sslTry(ssl.RSA_set0_factors(sk_, p, q));
+    p = null;
+    q = null;
 
     const sk_evp_pkey = try sslAlloc(EVP_PKEY, ssl.EVP_PKEY_new());
     _ = ssl.EVP_PKEY_assign(sk_evp_pkey, ssl.EVP_PKEY_RSA, sk_);
