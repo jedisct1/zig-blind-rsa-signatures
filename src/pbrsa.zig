@@ -784,6 +784,10 @@ pub fn PartiallyBlindRsaCustom(
                 const sk = try sslAlloc(RSA, ssl.RSA_new());
                 errdefer ssl.RSA_free(sk);
 
+                const crt_params = try CrtParams.compute(bn_ctx, p.?, q.?, d.?);
+                errdefer crt_params.deinit();
+                try sslTry(ssl.RSA_set0_crt_params(sk, crt_params.dmp1, crt_params.dmq1, crt_params.iqmp));
+
                 try sslTry(ssl.RSA_set0_key(sk, n, e, d));
                 n = null;
                 e = null;
