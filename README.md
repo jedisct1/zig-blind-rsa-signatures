@@ -4,7 +4,7 @@ Author-blinded RSASSA-PSS RSAE signatures.
 
 This is an implementation of the [RSA Blind Signatures](https://www.rfc-editor.org/rfc/rfc9474.html) RFC.
 
-Also includes a preliminary implementation of the [Partially Blind RSA Signatures](https://chris-wood.github.io/draft-amjad-cfrg-partially-blind-rsa/draft-amjad-cfrg-partially-blind-rsa.html) draft.
+Also includes a preliminary implementation of the [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-amjad-cfrg-partially-blind-rsa/) draft.
 
 ## Protocol overview
 
