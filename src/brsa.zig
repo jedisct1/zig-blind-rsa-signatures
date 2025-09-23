@@ -728,24 +728,24 @@ test "Test vector generation" {
     try sslTry(bn2binPadded(&n, n.len, rsaParam(.n, sk.evp_pkey)));
     try sslTry(bn2binPadded(&d, d.len, rsaParam(.d, sk.evp_pkey)));
     try sslTry(bn2binPadded(&e, e.len, rsaParam(.e, sk.evp_pkey)));
-    debug.print("p: {s}\n", .{fmt.fmtSliceHexLower(&p)});
-    debug.print("q: {s}\n", .{fmt.fmtSliceHexLower(&q)});
-    debug.print("n: {s}\n", .{fmt.fmtSliceHexLower(&n)});
-    debug.print("d: {s}\n", .{fmt.fmtSliceHexLower(&d)});
-    debug.print("e: {s}\n", .{fmt.fmtSliceHexLower(&e)});
+    debug.print("p: {x}\n", .{p});
+    debug.print("q: {x}\n", .{q});
+    debug.print("n: {x}\n", .{n});
+    debug.print("d: {x}\n", .{d});
+    debug.print("e: {x}\n", .{e});
 
     const msg = "This is just a test vector";
-    debug.print("msg: {s}\n", .{fmt.fmtSliceHexLower(msg)});
+    debug.print("msg: {x}\n", .{msg});
     const blinded_msg = try pk.blind(msg, true);
-    debug.print("msg_randomizer: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.msg_randomizer.?)});
-    debug.print("inv: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.secret)});
-    debug.print("blinded_message: {s}\n", .{fmt.fmtSliceHexLower(&blinded_msg.blind_message)});
+    debug.print("msg_randomizer: {x}\n", .{blinded_msg.msg_randomizer.?});
+    debug.print("inv: {x}\n", .{blinded_msg.secret});
+    debug.print("blinded_message: {x}\n", .{blinded_msg.blind_message});
 
     const blind_sig = try sk.blindSign(blinded_msg.blind_message);
-    debug.print("blind_sig: {s}\n", .{fmt.fmtSliceHexLower(&blind_sig)});
+    debug.print("blind_sig: {x}\n", .{blind_sig});
 
     const sig = try pk.finalize(blind_sig, blinded_msg.secret, blinded_msg.msg_randomizer, msg);
-    debug.print("sig: {s}\n", .{fmt.fmtSliceHexLower(&sig)});
+    debug.print("sig: {x}\n", .{sig});
 
     var spki_buf: [BRsa.PublicKey.max_spki_length]u8 = undefined;
     const spki = try pk.serialize_spki(&spki_buf);
