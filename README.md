@@ -4,7 +4,7 @@ Author-blinded RSASSA-PSS RSAE signatures.
 
 This is an implementation of the [RSA Blind Signatures](https://www.rfc-editor.org/rfc/rfc9474.html) RFC.
 
-Also includes a preliminary implementation of the [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-amjad-cfrg-partially-blind-rsa/) draft.
+Also implements [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-amjad-cfrg-partially-blind-rsa/).
 
 ## Protocol overview
 
@@ -31,56 +31,118 @@ This implementation requires OpenSSL or BoringSSL.
 ## Usage
 
 ```zig
-    // [SERVER]: Generate a RSA-2048 key pair
-    const kp = try BlindRsa(2048).KeyPair.generate();
-    defer kp.deinit();
-    const pk = kp.pk;
-    const sk = kp.sk;
+const BlindRsa = @import("rsa-blind-signatures").brsa.BlindRsa;
 
-    // [CLIENT]: create a random message and blind it for the server whose public key is `pk`.
-    // The second parameter determines whether noise should be added to the message.
-    // `true` adds noise, and returns it as `blinding_result.msg_randomizer`
-    // `false` doesn't prefix the message with noise.
-    // The client must store the message, the optional noise, and the secret.
-    const msg = "msg";
-    var blinding_result = try pk.blind(msg, true);
+// [SERVER]: Generate a RSA-2048 key pair
+const kp = try BlindRsa(2048).KeyPair.generate();
+defer kp.deinit();
+const pk = kp.pk;
+const sk = kp.sk;
 
-    // [SERVER]: compute a signature for a blind message, to be sent to the client.
-    // The client secret should not be sent to the server.
-    const blind_sig = try sk.blindSign(blinding_result.blind_message);
+// [CLIENT]: create a random message and blind it for the server whose public key is `pk`.
+// The client must store the message and the blinding result.
+const msg = "msg";
+const blinding_result = try pk.blind(msg);
 
-    // [CLIENT]: later, when the client wants to redeem a signed blind message,
-    // using the blinding secret, it can locally compute the signature of the
-    // original message.
-    // The client then owns a new valid (message, signature) pair, and the
-    // server cannot link it to a previous(blinded message, blind signature) pair.
-    // Note that the finalization function also verifies that the new signature
-    // is correct for the server public key.
-    // The noise parameter can be set to `null` if the message wasn't prefixed with noise.
-    const sig = try pk.finalize(blind_sig, blinding_result.secret,
-                                blinding_result.msg_randomizer, msg);
+// [SERVER]: compute a signature for a blind message, to be sent to the client.
+// The client secret should not be sent to the server.
+const blind_sig = try sk.blindSign(blinding_result.blind_message);
 
-    // [SERVER]: a non-blind signature can be verified using the server's public key.
-    try pk.verify(sig, blinding_result.msg_randomizer, msg);
+// [CLIENT]: later, when the client wants to redeem a signed blind message,
+// using the blinding secret, it can locally compute the signature of the
+// original message.
+// The client then owns a new valid (message, signature) pair, and the
+// server cannot link it to a previous (blinded message, blind signature) pair.
+// Note that the finalization function also verifies that the new signature
+// is correct for the server public key.
+const sig = try pk.finalize(blind_sig, &blinding_result, msg);
+
+// [SERVER]: a non-blind signature can be verified using the server's public key.
+try pk.verify(sig, blinding_result.msg_randomizer, msg);
 ```
 
-Deterministic padding is also supported with the `BlindRsaDeterministic` type:
+## RFC9474 Variants
+
+The library supports all four variants defined in RFC9474:
 
 ```zig
-const BRsa = BlindRsaDeterministic(2048);
-const kp = BRSA.KeyPair.generate();
-...
+const brsa = @import("rsa-blind-signatures").brsa;
+
+// RSABSSA-SHA384-PSS-Randomized (default, recommended)
+const BRsa1 = brsa.BlindRsa(2048);
+
+// RSABSSA-SHA384-PSSZERO-Randomized
+const BRsa2 = brsa.BlindRsaPSSZeroRandomized(2048);
+
+// RSABSSA-SHA384-PSS-Deterministic
+const BRsa3 = brsa.BlindRsaPSSDeterministic(2048);
+
+// RSABSSA-SHA384-PSSZERO-Deterministic
+const BRsa4 = brsa.BlindRsaDeterministic(2048);
 ```
 
-For specific use cases, custom hash functions and salt lengths are also accessible via the `BlindRsaCustom` type.
+For specific use cases, custom hash functions and PSS modes are accessible via the `BlindRsaCustom` type:
 
 ```zig
-const BRsa = BlindRsaCustom(2048, .sha256, 48);
-const kp = BRSA.KeyPair.generate();
-...
+const BRsa = brsa.BlindRsaCustom(2048, .sha256, .pss, .randomized);
+const kp = try BRsa.KeyPair.generate();
 ```
 
-Some helper functions are also included for key serialization and deserialization.
+## Partially Blind RSA Signatures
+
+Partially blind signatures allow the signer to include public metadata in the signature, which is visible to both parties. This is useful when the server needs to embed information (like an expiration date) that will be part of the final signature.
+
+```zig
+const PartiallyBlindRsa = @import("rsa-blind-signatures").pbrsa.PartiallyBlindRsa;
+
+// [SERVER]: Generate a RSA-2048 master key pair
+const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
+defer kp.deinit();
+
+// Public metadata that will be bound to the signature
+const metadata = "metadata";
+
+// [SERVER]: Derive a key pair for the specific metadata
+const derived_kp = try kp.deriveKeyPairForMetadata(metadata);
+defer derived_kp.deinit();
+const derived_pk = derived_kp.pk;
+const derived_sk = derived_kp.sk;
+
+// [CLIENT]: Blind a message using the derived public key
+const msg = "msg";
+const blinding_result = try derived_pk.blind(msg, metadata);
+
+// [SERVER]: Sign the blinded message
+const blind_sig = try derived_sk.blindSign(blinding_result.blind_message);
+
+// [CLIENT]: Finalize the signature
+const sig = try derived_pk.finalize(blind_sig, &blinding_result, msg, metadata);
+
+// [SERVER]: Verify the signature (metadata is required for verification)
+try derived_pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
+```
+
+The same RFC9474 variants are available for partially blind signatures:
+
+```zig
+const pbrsa = @import("rsa-blind-signatures").pbrsa;
+
+// RSAPBSSA-SHA384-PSS-Randomized (default, recommended)
+const PBRsa1 = pbrsa.PartiallyBlindRsa(2048);
+
+// RSAPBSSA-SHA384-PSSZERO-Randomized
+const PBRsa2 = pbrsa.PartiallyBlindRsaPSSZeroRandomized(2048);
+
+// RSAPBSSA-SHA384-PSS-Deterministic
+const PBRsa3 = pbrsa.PartiallyBlindRsaPSSDeterministic(2048);
+
+// RSAPBSSA-SHA384-PSSZERO-Deterministic
+const PBRsa4 = pbrsa.PartiallyBlindRsaDeterministic(2048);
+```
+
+## Serialization
+
+Helper functions are included for key serialization and deserialization.
 
 ## For other languages
 

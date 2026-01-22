@@ -93,7 +93,14 @@ const HashParams = struct {
     const sha512 = .{ .evp_fn = ssl.EVP_sha512, .salt_length = 64 };
 };
 
-//
+/// Hash function to use
+pub const HashFunction = enum { sha256, sha384, sha512 };
+
+/// PSS mode: PSS uses hash-length salt, PSSZero uses no salt
+pub const PSSMode = enum { pss, pss_zero };
+
+/// Prepare mode: whether to randomize the message with a prefix
+pub const PrepareMode = enum { randomized, deterministic };
 
 const allow_nonstandard_exponent = true;
 
@@ -202,23 +209,33 @@ const CrtParams = struct {
     }
 };
 
-/// Standard blind RSA signatures with a `modulus_bits` modulus size.
+/// RSAPBSSA-SHA384-PSS-Randomized (default)
 /// Recommended for most applications.
 pub fn PartiallyBlindRsa(comptime modulus_bits: u16) type {
-    return PartiallyBlindRsaCustom(modulus_bits, .sha384, HashParams.sha384.salt_length);
+    return PartiallyBlindRsaCustom(modulus_bits, .sha384, .pss, .randomized);
 }
 
-/// Blind RSA signatures with a `modulus_bits` modulus size.
-/// Non-deterministic padding is recommended for most applications.
+/// RSAPBSSA-SHA384-PSSZERO-Randomized
+pub fn PartiallyBlindRsaPSSZeroRandomized(comptime modulus_bits: u16) type {
+    return PartiallyBlindRsaCustom(modulus_bits, .sha384, .pss_zero, .randomized);
+}
+
+/// RSAPBSSA-SHA384-PSS-Deterministic
+pub fn PartiallyBlindRsaPSSDeterministic(comptime modulus_bits: u16) type {
+    return PartiallyBlindRsaCustom(modulus_bits, .sha384, .pss, .deterministic);
+}
+
+/// RSAPBSSA-SHA384-PSSZERO-Deterministic
 pub fn PartiallyBlindRsaDeterministic(comptime modulus_bits: u16) type {
-    return PartiallyBlindRsaCustom(modulus_bits, .sha384, 0);
+    return PartiallyBlindRsaCustom(modulus_bits, .sha384, .pss_zero, .deterministic);
 }
 
-/// Blind RSA signatures with custom parameters.
+/// Partially blind RSA signatures with custom parameters.
 pub fn PartiallyBlindRsaCustom(
     comptime modulus_bits: u16,
-    comptime hash_function: enum { sha256, sha384, sha512 },
-    comptime salt_length: usize,
+    comptime hash_function: HashFunction,
+    comptime pss_mode: PSSMode,
+    comptime prepare_mode: PrepareMode,
 ) type {
     assert(modulus_bits >= 2048 and modulus_bits <= 4096 and modulus_bits % 16 == 0);
     const Hash = switch (hash_function) {
@@ -226,6 +243,11 @@ pub fn PartiallyBlindRsaCustom(
         .sha384 => HashParams.sha384,
         .sha512 => HashParams.sha512,
     };
+    const salt_length: usize = switch (pss_mode) {
+        .pss => Hash.salt_length,
+        .pss_zero => 0,
+    };
+    const randomize_message = prepare_mode == .randomized;
 
     return struct {
         const modulus_bytes = (modulus_bits + 7) / 8;
@@ -429,15 +451,15 @@ pub fn PartiallyBlindRsaCustom(
             }
 
             /// Blind a message and return the random blinding secret and the blind message.
-            /// randomize_msg can be set to `true` to randomize the message before blinding.
-            /// In that case, the message randomizer is returned as BlindingResult.msg_randomizer.
-            pub fn blind(pk: PublicKey, msg: []const u8, randomize_msg: bool, metadata: ?[]const u8) !BlindingResult {
+            /// If prepare_mode is .randomized, the message is randomized with a prefix
+            /// returned as BlindingResult.msg_randomizer.
+            pub fn blind(pk: PublicKey, msg: []const u8, metadata: ?[]const u8) !BlindingResult {
                 // Compute H(msg)
                 const evp_md = Hash.evp_fn().?;
                 var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
 
                 var msg_randomizer: ?MessageRandomizer = null;
-                if (randomize_msg) {
+                if (randomize_message) {
                     msg_randomizer = [_]u8{0} ** @sizeOf(MessageRandomizer);
                     try sslTry(ssl.RAND_bytes(&msg_randomizer.?, @as(c_int, @intCast(msg_randomizer.?.len))));
                 }
@@ -469,8 +491,7 @@ pub fn PartiallyBlindRsaCustom(
             pub fn finalize(
                 pk: PublicKey,
                 blind_sig: BlindSignature,
-                secret_s: Secret,
-                msg_randomizer: ?MessageRandomizer,
+                blinding_result: *const BlindingResult,
                 msg: []const u8,
                 metadata: ?[]const u8,
             ) !Signature {
@@ -484,14 +505,14 @@ pub fn PartiallyBlindRsaCustom(
                 const blind_z: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
                 const z: *BIGNUM = try sslAlloc(BIGNUM, ssl.BN_CTX_get(bn_ctx));
 
-                try sslNTry(BIGNUM, ssl.BN_bin2bn(&secret_s, secret_s.len, secret));
+                try sslNTry(BIGNUM, ssl.BN_bin2bn(&blinding_result.secret, blinding_result.secret.len, secret));
                 try sslNTry(BIGNUM, ssl.BN_bin2bn(&blind_sig, blind_sig.len, blind_z));
 
                 try sslTry(ssl.BN_mod_mul(z, blind_z, secret, rsaParam(.n, pk.evp_pkey), bn_ctx));
 
                 var sig: Signature = undefined;
                 try sslTry(bn2binPadded(&sig, sig.len, z));
-                try verify(pk, sig, msg_randomizer, msg, metadata);
+                try verify(pk, sig, blinding_result.msg_randomizer, msg, metadata);
                 return sig;
             }
 
@@ -936,7 +957,7 @@ test "Partially blind RSA signatures" {
     // Blind a message with the server public key,
     // return the blinding factor and the blind message
     const msg = "msg";
-    const blinding_result = try derived_pk.blind(msg, false, metadata);
+    const blinding_result = try derived_pk.blind(msg, metadata);
 
     // Compute a blind signature
     const blind_sig = try derived_sk.blindSign(blinding_result.blind_message);
@@ -944,8 +965,7 @@ test "Partially blind RSA signatures" {
     // Compute the signature for the original message
     const sig = try derived_pk.finalize(
         blind_sig,
-        blinding_result.secret,
-        blinding_result.msg_randomizer,
+        &blinding_result,
         msg,
         metadata,
     );
