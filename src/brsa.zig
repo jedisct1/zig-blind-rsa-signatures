@@ -479,6 +479,34 @@ pub fn BlindRsaCustom(
                 }
                 return import(bytes[alg_len + 11 ..]);
             }
+
+            /// Provides access to the raw RSA key components.
+            pub const Components = struct {
+                evp_pkey: *const EVP_PKEY,
+
+                /// Returns the modulus (n) as big-endian bytes.
+                pub fn n(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.n, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns the public exponent (e) as big-endian bytes.
+                pub fn e(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.e, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+            };
+
+            /// Returns an accessor for the raw RSA key components.
+            pub fn components(pk: PublicKey) Components {
+                return .{ .evp_pkey = pk.evp_pkey };
+            }
         };
 
         /// An RSA secret key
@@ -528,9 +556,9 @@ pub fn BlindRsaCustom(
 
             /// Compute a blind signature
             pub fn blindSign(sk: SecretKey, blind_message: BlindMessage) !BlindSignature {
-                const n = rsaParam(.n, sk.evp_pkey);
+                const bn_n = rsaParam(.n, sk.evp_pkey);
                 var n_s: [blind_message.len]u8 = undefined;
-                try sslTry(bn2binPadded(&n_s, n_s.len, n));
+                try sslTry(bn2binPadded(&n_s, n_s.len, bn_n));
                 for (blind_message, 0..) |a, i| {
                     const b = n_s[i];
                     if (a < b) break;
@@ -539,6 +567,91 @@ pub fn BlindRsaCustom(
                 var blind_sig: BlindSignature = undefined;
                 try sslNegTry(ssl.RSA_private_encrypt(blind_sig.len, &blind_message, &blind_sig, rsaRef(sk.evp_pkey), ssl.RSA_NO_PADDING));
                 return blind_sig;
+            }
+
+            /// Provides access to the raw RSA key components.
+            pub const Components = struct {
+                evp_pkey: *const EVP_PKEY,
+
+                /// Returns the modulus (n) as big-endian bytes.
+                pub fn n(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.n, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns the public exponent (e) as big-endian bytes.
+                pub fn e(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.e, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns the private exponent (d) as big-endian bytes.
+                pub fn d(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.d, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns the first prime factor (p) as big-endian bytes.
+                pub fn p(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.p, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns the second prime factor (q) as big-endian bytes.
+                pub fn q(self: Components, out: []u8) ![]u8 {
+                    const bn = rsaParam(.q, self.evp_pkey);
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns d mod (p-1) as big-endian bytes.
+                /// Returns error.CrtParameterNotSet if not precomputed.
+                pub fn dmp1(self: Components, out: []u8) ![]u8 {
+                    const bn = ssl.RSA_get0_dmp1(rsaRef(self.evp_pkey)) orelse return error.CrtParameterNotSet;
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns d mod (q-1) as big-endian bytes.
+                /// Returns error.CrtParameterNotSet if not precomputed.
+                pub fn dmq1(self: Components, out: []u8) ![]u8 {
+                    const bn = ssl.RSA_get0_dmq1(rsaRef(self.evp_pkey)) orelse return error.CrtParameterNotSet;
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+
+                /// Returns q^(-1) mod p as big-endian bytes.
+                /// Returns error.CrtParameterNotSet if not precomputed.
+                pub fn iqmp(self: Components, out: []u8) ![]u8 {
+                    const bn = ssl.RSA_get0_iqmp(rsaRef(self.evp_pkey)) orelse return error.CrtParameterNotSet;
+                    const len: usize = @intCast(ssl.BN_num_bytes(bn));
+                    if (out.len < len) return error.OutputTooSmall;
+                    _ = ssl.BN_bn2bin(bn, out.ptr);
+                    return out[0..len];
+                }
+            };
+
+            /// Returns an accessor for the raw RSA key components.
+            pub fn components(sk: SecretKey) Components {
+                return .{ .evp_pkey = sk.evp_pkey };
             }
         };
 
