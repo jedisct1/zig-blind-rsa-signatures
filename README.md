@@ -4,7 +4,7 @@ Author-blinded RSASSA-PSS RSAE signatures.
 
 This is an implementation of the [RSA Blind Signatures](https://www.rfc-editor.org/rfc/rfc9474.html) RFC.
 
-Also implements [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-amjad-cfrg-partially-blind-rsa/).
+Also implements [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-irtf-cfrg-partially-blind-rsa/).
 
 ## Protocol overview
 
@@ -142,7 +142,56 @@ const PBRsa4 = pbrsa.PartiallyBlindRsaDeterministic(2048);
 
 ## Serialization
 
-Helper functions are included for key serialization and deserialization.
+Keys can be serialized and deserialized in multiple formats:
+
+```zig
+const BRsa = brsa.BlindRsa(2048);
+
+// Public keys
+const pk = kp.pk;
+var buf: [1000]u8 = undefined;
+
+// Raw format
+const raw = try pk.serialize(&buf);
+const pk2 = try BRsa.PublicKey.import(raw);
+
+// DER format
+const der = try pk.serialize_der(&buf);
+const pk3 = try BRsa.PublicKey.import_der(der);
+
+// SPKI format (SubjectPublicKeyInfo)
+const spki = try pk.serialize_spki(&buf);
+const pk4 = try BRsa.PublicKey.import_spki(spki);
+
+// Secret keys (DER format)
+const sk = kp.sk;
+const sk_der = try sk.serialize(&buf);
+const sk2 = try BRsa.SecretKey.import(sk_der);
+```
+
+## Accessing RSA Components
+
+Raw RSA key components can be accessed for interoperability:
+
+```zig
+var buf: [256]u8 = undefined;
+
+// Public key components
+const pk_components = pk.components();
+const n = try pk_components.n(&buf); // modulus
+const e = try pk_components.e(&buf); // public exponent
+
+// Secret key components
+const sk_components = sk.components();
+const d = try sk_components.d(&buf);    // private exponent
+const p = try sk_components.p(&buf);    // first prime factor
+const q = try sk_components.q(&buf);    // second prime factor
+const dmp1 = try sk_components.dmp1(&buf); // d mod (p-1)
+const dmq1 = try sk_components.dmq1(&buf); // d mod (q-1)
+const iqmp = try sk_components.iqmp(&buf); // q^(-1) mod p
+```
+
+All values are returned as big-endian byte slices.
 
 ## For other languages
 
