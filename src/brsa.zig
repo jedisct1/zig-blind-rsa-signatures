@@ -5,19 +5,7 @@ const debug = std.debug;
 const fmt = std.fmt;
 const mem = std.mem;
 
-const ssl = @cImport({
-    @cDefine("__FILE__", "\"blind_rsa.zig\"");
-    @cDefine("__LINE__", "0");
-    @cDefine("OPENSSL_API_COMPAT", "10100");
-
-    @cInclude("openssl/bn.h");
-    @cInclude("openssl/evp.h");
-    @cInclude("openssl/rsa.h");
-    @cInclude("openssl/sha.h");
-    @cInclude("openssl/crypto.h");
-    @cInclude("openssl/rand.h");
-    @cInclude("openssl/x509.h");
-});
+const ssl = @import("ssl");
 
 const IS_BORINGSSL = @hasDecl(ssl, "BORINGSSL_API_VERSION");
 

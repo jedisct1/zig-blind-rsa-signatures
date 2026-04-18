@@ -7,6 +7,13 @@ const crypto_lib: CryptoLib = .openssl;
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
+
+    const ssl = b.addTranslateC(.{
+        .root_source_file = b.path("src/openssl.h"),
+        .target = target,
+        .optimize = optimize,
+    }).createModule();
+
     const lib = b.addLibrary(.{
         .name = "rsa-blind-signatures",
         .root_module = b.createModule(.{
@@ -16,6 +23,7 @@ pub fn build(b: *std.Build) void {
         }),
         .linkage = .static,
     });
+    lib.root_module.addImport("ssl", ssl);
     b.installArtifact(lib);
 
     var main_tests = b.addTest(.{
@@ -25,6 +33,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    main_tests.root_module.addImport("ssl", ssl);
 
     if (crypto_lib == .openssl) {
         main_tests.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
