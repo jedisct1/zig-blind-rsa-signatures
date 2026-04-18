@@ -1,0 +1,7 @@
+.{
+    .name = .rsa_blind_signatures,
+    .version = "0.0.1",
+    .dependencies = .{},
+    .paths = .{""},
+    .fingerprint = 0x31ae2c04dcb7960,
+}
