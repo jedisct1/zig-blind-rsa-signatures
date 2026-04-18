@@ -26,7 +26,7 @@ The scheme was designed by David Chaum, and was originally implemented for anony
 
 ## Dependencies
 
-This implementation requires OpenSSL or BoringSSL.
+This implementation requires `OpenSSL`.
 
 ## Usage
 
@@ -192,6 +192,28 @@ const iqmp = try sk_components.iqmp(&buf); // q^(-1) mod p
 ```
 
 All values are returned as big-endian byte slices.
+
+## Using this as a zig package
+
+Add it as a dependency in `build.zig.zon`.
+
+```zig
+.dependencies = .{
+    .rsa_blind_signatures = .{
+        .url = "https://github.com/jedisct1/zig-blind-rsa-signatures/archive/refs/heads/main.tar.gz",
+    },
+},
+```
+
+Add as a dependency and import in `build.zig`.
+
+```zig
+const rsa_blind_signatures = b.dependency("rsa_blind_signatures", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("rsa-blind-signatures", rsa_blind_signatures.module("rsa-blind-signatures"));
+```
 
 ## For other languages
 
