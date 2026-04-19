@@ -20,16 +20,18 @@ pub fn build(b: *std.Build) void {
 
     const ssl_module = translate_c.createModule();
 
+    const mod = b.addModule("blind_rsa_signatures", .{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ssl", .module = ssl_module },
+        },
+    });
+
     const lib = b.addLibrary(.{
-        .name = "rsa-blind-signatures",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "ssl", .module = ssl_module },
-            },
-        }),
+        .name = "blind-rsa-signatures",
+        .root_module = mod,
         .linkage = .static,
     });
     b.installArtifact(lib);

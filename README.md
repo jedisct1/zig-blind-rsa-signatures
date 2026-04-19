@@ -46,7 +46,7 @@ zig build test -Dboringssl=/path/to/boringssl/install
 ## Usage
 
 ```zig
-const BlindRsa = @import("rsa-blind-signatures").brsa.BlindRsa;
+const BlindRsa = @import("blind_rsa_signatures").brsa.BlindRsa;
 
 // [SERVER]: Generate a RSA-2048 key pair
 const kp = try BlindRsa(2048).KeyPair.generate();
@@ -81,7 +81,7 @@ try pk.verify(sig, blinding_result.msg_randomizer, msg);
 The library supports all four variants defined in RFC9474:
 
 ```zig
-const brsa = @import("rsa-blind-signatures").brsa;
+const brsa = @import("blind_rsa_signatures").brsa;
 
 // RSABSSA-SHA384-PSS-Randomized (default, recommended)
 const BRsa1 = brsa.BlindRsa(2048);
@@ -108,7 +108,7 @@ const kp = try BRsa.KeyPair.generate();
 Partially blind signatures allow the signer to include public metadata in the signature, which is visible to both parties. This is useful when the server needs to embed information (like an expiration date) that will be part of the final signature.
 
 ```zig
-const PartiallyBlindRsa = @import("rsa-blind-signatures").pbrsa.PartiallyBlindRsa;
+const PartiallyBlindRsa = @import("blind_rsa_signatures").pbrsa.PartiallyBlindRsa;
 
 // [SERVER]: Generate a RSA-2048 master key pair
 const kp = try PartiallyBlindRsa(2048).KeyPair.generate();
@@ -140,7 +140,7 @@ try derived_pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
 The same RFC9474 variants are available for partially blind signatures:
 
 ```zig
-const pbrsa = @import("rsa-blind-signatures").pbrsa;
+const pbrsa = @import("blind_rsa_signatures").pbrsa;
 
 // RSAPBSSA-SHA384-PSS-Randomized (default, recommended)
 const PBRsa1 = pbrsa.PartiallyBlindRsa(2048);

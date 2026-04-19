@@ -1,0 +1,13 @@
+.{
+    .name = .blind_rsa_signatures,
+    .version = "0.0.0",
+    .fingerprint = 0xd64d3e908791b3e3,
+    .minimum_zig_version = "0.17.0-dev.38+84c2d809e",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+    },
+}
