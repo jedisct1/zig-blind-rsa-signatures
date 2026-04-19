@@ -5,19 +5,7 @@ const debug = std.debug;
 const fmt = std.fmt;
 const mem = std.mem;
 
-const ssl = @cImport({
-    @cDefine("__FILE__", "\"blind_rsa.zig\"");
-    @cDefine("__LINE__", "0");
-    @cDefine("OPENSSL_API_COMPAT", "10100");
-
-    @cInclude("openssl/bn.h");
-    @cInclude("openssl/evp.h");
-    @cInclude("openssl/rsa.h");
-    @cInclude("openssl/sha.h");
-    @cInclude("openssl/crypto.h");
-    @cInclude("openssl/rand.h");
-    @cInclude("openssl/x509.h");
-});
+const ssl = @import("ssl");
 
 const IS_BORINGSSL = @hasDecl(ssl, "BORINGSSL_API_VERSION");
 
@@ -441,10 +429,10 @@ pub fn BlindRsaCustom(
 
                 const algor_mgf1 = try sslAlloc(X509_ALGOR, ssl.X509_ALGOR_new());
                 defer ssl.X509_ALGOR_free(algor_mgf1);
-                ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
+                _ = ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
                 var algor_mgf1_s_ptr: ?*ssl.ASN1_STRING = try sslAlloc(ssl.ASN1_STRING, ssl.ASN1_STRING_new());
                 defer ssl.ASN1_STRING_free(algor_mgf1_s_ptr);
-                const alg_rptr: *const ssl.ASN1_ITEM = if (IS_BORINGSSL) &ssl.X509_ALGOR_it else ssl.X509_ALGOR_it().?;
+                const alg_rptr: *const ssl.ASN1_ITEM = if (IS_BORINGSSL) @extern(*const ssl.ASN1_ITEM, .{ .name = "X509_ALGOR_it" }) else ssl.X509_ALGOR_it().?;
                 try sslNTry(ssl.ASN1_STRING, ssl.ASN1_item_pack(algor_mgf1, alg_rptr, &algor_mgf1_s_ptr));
                 const algor_mgf1_s_len = ssl.ASN1_STRING_length(algor_mgf1_s_ptr);
                 const algor_mgf1_s = ssl.ASN1_STRING_get0_data(algor_mgf1_s_ptr)[0..@as(usize, @intCast(algor_mgf1_s_len))];

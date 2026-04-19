@@ -5,20 +5,7 @@ const debug = std.debug;
 const fmt = std.fmt;
 const mem = std.mem;
 
-const ssl = @cImport({
-    @cDefine("__FILE__", "\"blind_rsa.zig\"");
-    @cDefine("__LINE__", "0");
-    @cDefine("OPENSSL_API_COMPAT", "10100");
-
-    @cInclude("openssl/bn.h");
-    @cInclude("openssl/evp.h");
-    @cInclude("openssl/rsa.h");
-    @cInclude("openssl/sha.h");
-    @cInclude("openssl/crypto.h");
-    @cInclude("openssl/rand.h");
-    @cInclude("openssl/x509.h");
-    @cInclude("openssl/kdf.h");
-});
+const ssl = @import("ssl");
 
 const is_boringssl = @hasDecl(ssl, "BORINGSSL_API_VERSION");
 
@@ -429,7 +416,7 @@ pub fn PartiallyBlindRsaCustom(
                 if (len < 0 or len > serialized.len) {
                     return error.Overflow;
                 }
-                mem.copy(u8, serialized, @as([*]const u8, @ptrCast(serialized_ptr.?))[0..@as(usize, @intCast(len))]);
+                @memcpy(serialized[0..@intCast(len)], @as([*]const u8, @ptrCast(serialized_ptr.?))[0..@intCast(len)]);
                 return serialized[0..@as(usize, @intCast(len))];
             }
 
@@ -446,7 +433,7 @@ pub fn PartiallyBlindRsaCustom(
                 if (len < 0 or len > serialized.len) {
                     return error.Overflow;
                 }
-                mem.copy(u8, serialized, @as([*]const u8, @ptrCast(serialized_ptr.?))[0..@as(usize, @intCast(len))]);
+                @memcpy(serialized[0..@intCast(len)], @as([*]const u8, @ptrCast(serialized_ptr.?))[0..@intCast(len)]);
                 return serialized[0..@as(usize, @intCast(len))];
             }
 
@@ -620,33 +607,33 @@ pub fn PartiallyBlindRsaCustom(
                     return error.Overflow;
                 }
                 var out = buf[0..out_len];
-                mem.copy(u8, out[0..spki_tpl.len], spki_tpl[0..]);
-                mem.copy(u8, out[spki_tpl.len..], raw);
+                @memcpy(out[0..spki_tpl.len], spki_tpl[0..]);
+                @memcpy(out[spki_tpl.len..out_len], raw);
                 mem.writeInt(u16, out[2..4], @as(u16, @intCast(container_len)), .big);
                 out[66] = @as(u8, @intCast(salt_length));
                 mem.writeInt(u16, out[69..71], @as(u16, @intCast(1 + raw.len)), .big);
 
                 const algor_mgf1 = try sslAlloc(X509_ALGOR, ssl.X509_ALGOR_new());
                 defer ssl.X509_ALGOR_free(algor_mgf1);
-                ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
+                _ = ssl.X509_ALGOR_set_md(algor_mgf1, Hash.evp_fn().?);
                 var algor_mgf1_s_ptr: ?*ssl.ASN1_STRING = try sslAlloc(ssl.ASN1_STRING, ssl.ASN1_STRING_new());
                 defer ssl.ASN1_STRING_free(algor_mgf1_s_ptr);
-                const alg_rptr: *const ssl.ASN1_ITEM = if (is_boringssl) &ssl.X509_ALGOR_it else ssl.X509_ALGOR_it().?;
+                const alg_rptr: *const ssl.ASN1_ITEM = if (is_boringssl) @extern(*const ssl.ASN1_ITEM, .{ .name = "X509_ALGOR_it" }) else ssl.X509_ALGOR_it().?;
                 try sslNTry(ssl.ASN1_STRING, ssl.ASN1_item_pack(algor_mgf1, alg_rptr, &algor_mgf1_s_ptr));
                 const algor_mgf1_s_len = ssl.ASN1_STRING_length(algor_mgf1_s_ptr);
                 const algor_mgf1_s = ssl.ASN1_STRING_get0_data(algor_mgf1_s_ptr)[0..@as(usize, @intCast(algor_mgf1_s_len))];
                 var mgf1_s_data: [2 + 2 + 9]u8 = undefined;
                 if (algor_mgf1_s_len == mgf1_s_data.len) {
-                    mem.copy(u8, &mgf1_s_data, algor_mgf1_s);
+                    @memcpy(&mgf1_s_data, algor_mgf1_s);
                 } else {
                     assert(algor_mgf1_s_len == mgf1_s_data.len + 2); // Trailing NUL
                     assert(algor_mgf1_s[1] == mgf1_s_data.len and algor_mgf1_s[3] == 9 and
                         algor_mgf1_s[mgf1_s_data.len] == 5 and algor_mgf1_s[mgf1_s_data.len + 1] == 0);
-                    mem.copy(u8, &mgf1_s_data, algor_mgf1_s[0..mgf1_s_data.len]);
+                    @memcpy(&mgf1_s_data, algor_mgf1_s[0..mgf1_s_data.len]);
                     mgf1_s_data[1] -= 2;
                 }
-                mem.copy(u8, out[21..][0..mgf1_s_data.len], &mgf1_s_data);
-                mem.copy(u8, out[49..][0..mgf1_s_data.len], &mgf1_s_data);
+                @memcpy(out[21..][0..mgf1_s_data.len], &mgf1_s_data);
+                @memcpy(out[49..][0..mgf1_s_data.len], &mgf1_s_data);
                 return out;
             }
 
@@ -732,7 +719,7 @@ pub fn PartiallyBlindRsaCustom(
                 if (len < 0 or len > serialized.len) {
                     return error.Overflow;
                 }
-                mem.copy(u8, serialized, @as([*]const u8, @ptrCast(serialized_ptr.?))[0..@as(usize, @intCast(len))]);
+                @memcpy(serialized[0..@intCast(len)], @as([*]const u8, @ptrCast(serialized_ptr.?))[0..@intCast(len)]);
                 return serialized[0..@as(usize, @intCast(len))];
             }
 
