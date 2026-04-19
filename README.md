@@ -4,7 +4,7 @@ Author-blinded RSASSA-PSS RSAE signatures.
 
 This is an implementation of the [RSA Blind Signatures](https://www.rfc-editor.org/rfc/rfc9474.html) RFC.
 
-Also implements [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-irtf-cfrg-partially-blind-rsa/).
+Also implements [Partially Blind RSA Signatures](https://datatracker.ietf.org/doc/draft-irtf-cfrg-partially-blind-rsa/) as described in the IRTF draft.
 
 ## Protocol overview
 
@@ -24,9 +24,24 @@ Using that scheme, a server can issue a token and verify that a client has a val
 
 The scheme was designed by David Chaum, and was originally implemented for anonymizing DigiCash transactions.
 
-## Dependencies
+## Requirements
 
-This implementation requires OpenSSL or BoringSSL.
+This library requires Zig 0.17+ and either OpenSSL or BoringSSL.
+
+## Building
+
+OpenSSL is used by default and discovered via `pkg-config`:
+
+```sh
+zig build
+zig build test
+```
+
+To use BoringSSL instead, pass the install prefix:
+
+```sh
+zig build test -Dboringssl=/path/to/boringssl/install
+```
 
 ## Usage
 
