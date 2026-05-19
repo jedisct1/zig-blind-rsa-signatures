@@ -447,7 +447,7 @@ pub fn PartiallyBlindRsaCustom(
 
                 var msg_randomizer: ?MessageRandomizer = null;
                 if (randomize_message) {
-                    msg_randomizer = [_]u8{0} ** @sizeOf(MessageRandomizer);
+                    msg_randomizer = @splat(0);
                     try sslTry(ssl.RAND_bytes(&msg_randomizer.?, @as(c_int, @intCast(msg_randomizer.?.len))));
                 }
                 const msg_hash = try hash(evp_md, &msg_hash_buf, msg_randomizer, msg, metadata);
