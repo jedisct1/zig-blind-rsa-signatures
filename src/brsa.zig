@@ -745,6 +745,32 @@ test "Deterministic RSA blind signatures (RSABSSA-SHA384-PSSZERO-Deterministic)"
     try pk.verify(sig, blinding_result.msg_randomizer, msg);
 }
 
+test "Verify rejects mismatched message-preparation mode" {
+    const Randomized = BlindRsaCustom(2048, .sha384, .pss, .randomized);
+    const Deterministic = BlindRsaCustom(2048, .sha384, .pss, .deterministic);
+
+    {
+        const kp = try Randomized.KeyPair.generate();
+        defer kp.deinit();
+        const msg = "msg";
+        const blinding_result = try kp.pk.blind(msg);
+        const blind_sig = try kp.sk.blindSign(blinding_result.blind_message);
+        const sig = try kp.pk.finalize(blind_sig, &blinding_result, msg);
+        try testing.expectError(error.VerificationFailed, kp.pk.verify(sig, null, msg));
+    }
+
+    {
+        const kp = try Deterministic.KeyPair.generate();
+        defer kp.deinit();
+        const msg = "msg";
+        const blinding_result = try kp.pk.blind(msg);
+        const blind_sig = try kp.sk.blindSign(blinding_result.blind_message);
+        const sig = try kp.pk.finalize(blind_sig, &blinding_result, msg);
+        const bogus_randomizer: Deterministic.MessageRandomizer = @splat(0);
+        try testing.expectError(error.VerificationFailed, kp.pk.verify(sig, bogus_randomizer, msg));
+    }
+}
+
 test "RSA export/import" {
     const kp = try BlindRsaCustom(2048, .sha256, .pss, .randomized).KeyPair.generate();
     defer kp.deinit();

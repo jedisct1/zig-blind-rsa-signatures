@@ -1077,6 +1077,36 @@ test "Partially blind RSA signatures" {
     try derived_pk.verify(sig, blinding_result.msg_randomizer, msg, metadata);
 }
 
+test "PBRSA verify rejects mismatched message-preparation mode" {
+    const Randomized = PartiallyBlindRsaCustom(2048, .sha384, .pss, .randomized);
+    const Deterministic = PartiallyBlindRsaCustom(2048, .sha384, .pss, .deterministic);
+    const metadata = "metadata";
+    const msg = "msg";
+
+    {
+        const kp = try Randomized.KeyPair.generate();
+        defer kp.deinit();
+        const derived_kp = try kp.deriveKeyPairForMetadata(metadata);
+        defer derived_kp.deinit();
+        const blinding_result = try derived_kp.pk.blind(msg, metadata);
+        const blind_sig = try derived_kp.sk.blindSign(blinding_result.blind_message);
+        const sig = try derived_kp.pk.finalize(blind_sig, &blinding_result, msg, metadata);
+        try testing.expectError(error.VerificationFailed, derived_kp.pk.verify(sig, null, msg, metadata));
+    }
+
+    {
+        const kp = try Deterministic.KeyPair.generate();
+        defer kp.deinit();
+        const derived_kp = try kp.deriveKeyPairForMetadata(metadata);
+        defer derived_kp.deinit();
+        const blinding_result = try derived_kp.pk.blind(msg, metadata);
+        const blind_sig = try derived_kp.sk.blindSign(blinding_result.blind_message);
+        const sig = try derived_kp.pk.finalize(blind_sig, &blinding_result, msg, metadata);
+        const bogus_randomizer: Deterministic.MessageRandomizer = @splat(0);
+        try testing.expectError(error.VerificationFailed, derived_kp.pk.verify(sig, bogus_randomizer, msg, metadata));
+    }
+}
+
 test "Test vector" {
     const tv = .{
         .p = "dcd90af1be463632c0d5ea555256a20605af3db667475e190e3af12a34a3324c46a3094062c59fb4b249e0ee6afba8bee14e0276d126c99f4784b23009bf6168ff628ac1486e5ae8e23ce4d362889de4df63109cbd90ef93db5ae64372bfe1c55f832766f21e94ea3322eb2182f10a891546536ba907ad74b8d72469bea396f3",
