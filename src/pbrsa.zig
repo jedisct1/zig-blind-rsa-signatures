@@ -551,6 +551,9 @@ pub fn PartiallyBlindRsaCustom(
             }
 
             fn rsaSsaPssVerify(pk: PublicKey, sig: Signature, msg_randomizer: ?MessageRandomizer, msg: []const u8, metadata: ?[]const u8) !void {
+                if ((msg_randomizer != null) != randomize_message) {
+                    return error.VerificationFailed;
+                }
                 const evp_md = Hash.evp_fn().?;
                 var msg_hash_buf: [ssl.EVP_MAX_MD_SIZE]u8 = undefined;
                 const msg_hash = try hash(evp_md, &msg_hash_buf, msg_randomizer, msg, metadata);
